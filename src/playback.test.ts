@@ -102,4 +102,24 @@ describe("playAudio", () => {
 
     expect(removed).toEqual(["/tmp/kokoro-cli-audio-save-failure"]);
   });
+
+  test("preserves the playback failure when temporary cleanup also fails", async () => {
+    await expect(
+      playAudio(
+        { save: async () => {} },
+        {
+          makeTempDirectory: async () => "/tmp/kokoro-cli-audio-double-failure",
+          spawn: () => ({
+            exited: Promise.resolve(7),
+            stderr: new Blob(["no audio device"]).stream(),
+          }),
+          removeDirectory: async () => {
+            throw new Error("permission denied\n    at cleanup.ts:1");
+          },
+        },
+      ),
+    ).rejects.toThrow(
+      "Unable to play speech: afplay exited 7: no audio device; Unable to remove temporary audio: permission denied",
+    );
+  });
 });

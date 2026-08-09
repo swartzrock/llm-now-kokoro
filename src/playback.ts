@@ -41,6 +41,8 @@ export async function playAudio(
     ((directory: string) => rm(directory, { recursive: true, force: true }));
   const directory = await makeTempDirectory();
   const wavPath = join(directory, "speech.wav");
+  let operationFailed = false;
+  let operationError: unknown;
 
   try {
     try {
@@ -70,8 +72,23 @@ export async function playAudio(
         `Unable to play speech: afplay exited ${exitCode}${detail ? `: ${detail}` : ""}`,
       );
     }
-  } finally {
+  } catch (error) {
+    operationFailed = true;
+    operationError = error;
+  }
+
+  try {
     await removeDirectory(directory);
+  } catch (cleanupError) {
+    const cleanupMessage = `Unable to remove temporary audio: ${errorMessage(cleanupError)}`;
+    if (operationFailed) {
+      throw new Error(`${errorMessage(operationError)}; ${cleanupMessage}`);
+    }
+    throw new Error(cleanupMessage);
+  }
+
+  if (operationFailed) {
+    throw operationError;
   }
 }
 
