@@ -6,7 +6,7 @@ import { verifyStandalone } from "../scripts/verify-standalone";
 const integrationEnabled = process.env.KOKORO_STANDALONE_TEST === "1";
 
 test.skipIf(!integrationEnabled)(
-  "compiled executable synthesizes cold and warm-offline from a clean room",
+  "compiled executable synthesizes ff_siwis cold and warm-offline from a clean room",
   async () => {
     await buildStandalone();
     const result = await verifyStandalone();

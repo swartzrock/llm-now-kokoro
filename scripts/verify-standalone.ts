@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
 import { assertBunVersion } from "../build";
-import { EXPECTED_VOICE_COUNT } from "../src/embedded-voices";
+import {
+  EXPECTED_VOICE_COUNT,
+  FRENCH_VOICE_FOR_ENGLISH,
+} from "../src/embedded-voices";
 import { ADDON_NAME, DYLIB_NAME } from "../src/native-runtime";
 
 interface CommandResult {
@@ -55,6 +58,7 @@ export async function verifyStandalone(
       LANG: process.env.LANG ?? "en_US.UTF-8",
       NO_COLOR: "1",
     };
+    const frenchVoiceArguments = ["--voice", FRENCH_VOICE_FOR_ENGLISH];
 
     const selfCheck = await run(copiedBinary, ["Embedded voice self-check."], room, {
       ...baseEnvironment,
@@ -69,10 +73,12 @@ export async function verifyStandalone(
       throw new Error(`Standalone embedded-voice self-check failed: ${selfCheck.stdout}`);
     }
 
-    const cold = await run(copiedBinary, ["Standalone cold-cache playback check."], room, {
-      ...baseEnvironment,
-      DYLD_PRINT_LIBRARIES: "1",
-    });
+    const cold = await run(
+      copiedBinary,
+      [...frenchVoiceArguments, "Standalone cold-cache playback check."],
+      room,
+      { ...baseEnvironment, DYLD_PRINT_LIBRARIES: "1" },
+    );
     assertCompletedSpeech("cold", cold);
     const pathAudit = auditLoadedPaths(
       cold.stderr,
@@ -80,10 +86,12 @@ export async function verifyStandalone(
       runtimeTemp,
     );
 
-    const warm = await run(copiedBinary, ["Standalone warm offline playback check."], room, {
-      ...baseEnvironment,
-      KOKORO_OFFLINE: "1",
-    });
+    const warm = await run(
+      copiedBinary,
+      [...frenchVoiceArguments, "Standalone warm offline playback check."],
+      room,
+      { ...baseEnvironment, KOKORO_OFFLINE: "1" },
+    );
     assertCompletedSpeech("warm offline", warm);
 
     const sidecars = [

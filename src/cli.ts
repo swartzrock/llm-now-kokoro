@@ -1,5 +1,6 @@
 import {
   EMBEDDED_VOICE_MANIFEST,
+  FRENCH_VOICE_FOR_ENGLISH,
   installEmbeddedVoiceProvider,
   type SupportedVoiceName,
   verifyEmbeddedVoices,
@@ -23,8 +24,8 @@ Options:
   --voice <voice>  Select an embedded voice (default: ${DEFAULT_VOICE})
   --help           Show this help
 
-Voice examples: af_heart, af_bella, am_adam, bf_emma
-${SUPPORTED_VOICES.length} English voices are available.`;
+Voice examples: af_heart, af_bella, am_adam, bf_emma, ff_siwis
+${SUPPORTED_VOICES.length} voices are available. ff_siwis uses English pronunciation with French timbre.`;
 
 interface PreparedRuntime {
   cleanup(): Promise<void>;
@@ -110,8 +111,9 @@ export function parseCliArguments(arguments_: string[]): CliCommand {
 
 function isSupportedVoice(voice: string): voice is SupportedVoiceName {
   return (
-    (voice.startsWith("a") || voice.startsWith("b")) &&
-    Object.hasOwn(EMBEDDED_VOICE_MANIFEST, voice)
+    voice === FRENCH_VOICE_FOR_ENGLISH ||
+    ((voice.startsWith("a") || voice.startsWith("b")) &&
+      Object.hasOwn(EMBEDDED_VOICE_MANIFEST, voice))
   );
 }
 

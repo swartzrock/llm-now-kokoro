@@ -58,11 +58,16 @@ describe("parseCliArguments", () => {
       text: "Hello",
       voice: "bf_emma",
     });
+    expect(parseCliArguments(["--voice", "ff_siwis", "Hello"])).toEqual({
+      kind: "speak",
+      text: "Hello",
+      voice: "ff_siwis",
+    });
   });
 
   test("returns the help command", () => {
     expect(parseCliArguments(["--help"])).toEqual({ kind: "help" });
-    expect(SUPPORTED_VOICES).toHaveLength(28);
+    expect(SUPPORTED_VOICES).toHaveLength(29);
   });
 
   test.each([
@@ -143,9 +148,9 @@ describe("runCli", () => {
       return { save: async () => {} };
     };
 
-    await runCli(["--voice", "bf_emma", "Hello"], dependencies);
+    await runCli(["--voice", "ff_siwis", "Hello"], dependencies);
 
-    expect(events).toContain("synthesize:bf_emma:Hello");
+    expect(events).toContain("synthesize:ff_siwis:Hello");
   });
 
   test("cleans native and voice state after synthesis fails", async () => {

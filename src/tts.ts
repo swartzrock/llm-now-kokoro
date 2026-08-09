@@ -5,7 +5,10 @@ import { env, type ProgressCallback, type ProgressInfo } from "@huggingface/tran
 import { KokoroTTS } from "kokoro-js";
 
 import { prepareModelCache } from "./cache";
-import type { SupportedVoiceName } from "./embedded-voices";
+import {
+  FRENCH_VOICE_FOR_ENGLISH,
+  type SupportedVoiceName,
+} from "./embedded-voices";
 import { errorMessage } from "./error-message";
 
 const MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
@@ -56,7 +59,7 @@ export async function synthesizeSpeech(
 ): Promise<GeneratedAudio> {
   const prepareCache = dependencies.prepareCache ?? prepareModelCache;
   const configureCache = dependencies.configureCache ?? configureTransformersCache;
-  const createModel = dependencies.createModel ?? KokoroTTS.from_pretrained;
+  const createModel = dependencies.createModel ?? createKokoroModel;
   const isModelFileCached =
     dependencies.isModelFileCached ?? modelFileIsCached;
   const reportProgress = dependencies.reportProgress ?? reportToStderr;
@@ -86,6 +89,20 @@ export async function synthesizeSpeech(
   } catch (error) {
     throw new Error(`Unable to synthesize speech: ${errorMessage(error)}`);
   }
+}
+
+async function createKokoroModel(
+  modelId: string,
+  options: ModelOptions,
+): Promise<SpeechModel> {
+  const model = await KokoroTTS.from_pretrained(modelId, options);
+  const validateVoice = model._validate_voice.bind(model);
+
+  model._validate_voice = (voice: unknown) =>
+    voice === FRENCH_VOICE_FOR_ENGLISH ? "a" : validateVoice(voice);
+
+  // kokoro-js 1.2.1 ships ff_siwis.bin but omits it from its public voice type.
+  return model as unknown as SpeechModel;
 }
 
 function configureTransformersCache(cachePath: string): void {

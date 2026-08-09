@@ -55,6 +55,7 @@ describe("source CLI argument validation", () => {
         'Usage: kokoro-cli [--voice <voice>] "text to speak"',
       );
       expect(result.stdout).toContain("--voice <voice>");
+      expect(result.stdout).toContain("ff_siwis");
       expect(result.stderr).toBe("");
       expect(
         await Bun.file(

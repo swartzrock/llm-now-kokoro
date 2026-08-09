@@ -18,16 +18,18 @@ the text as one shell argument:
 bun install
 bun index.ts "How was your day?"
 bun index.ts --voice af_bella "How was your day?"
+bun index.ts --voice ff_siwis "I am Siwis. Listen carefully."
 bun index.ts --help
 ```
 
 The quotes keep a multiword utterance in one argument. Missing text, whitespace-only
 text, an unknown voice, or additional arguments fail before the model loads.
 `--voice <voice>` may appear before or after the text. The default is `af_heart`;
-run `--help` for examples. `kokoro-js` 1.2.1 exposes 28 English voices to the
-synthesis API. The executable still embeds all 54 voice files shipped by the
-pinned package so a future library upgrade does not require changing its asset
-packaging.
+run `--help` for examples. In addition to the 28 English voices exposed by
+`kokoro-js` 1.2.1, the CLI supports `ff_siwis` with English phonemization and
+Siwis's French voice style. Pronunciation quality may vary because the voice was
+designed for French. The executable still embeds all 54 voice files shipped by
+the pinned package.
 
 ## Build and run the executable
 
@@ -37,6 +39,7 @@ Build on the Apple silicon Mac where the executable will run:
 bun run build
 ./dist/kokoro-cli "How was your day?"
 ./dist/kokoro-cli --voice bf_emma "How was your day?"
+./dist/kokoro-cli --voice ff_siwis "Listen carefully."
 ./dist/kokoro-cli --help
 ```
 

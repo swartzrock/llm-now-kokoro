@@ -169,10 +169,14 @@ export const EMBEDDED_VOICE_MANIFEST = {
 } as const;
 
 export type EmbeddedVoiceName = keyof typeof EMBEDDED_VOICE_MANIFEST;
-export type SupportedVoiceName = Extract<
+type EnglishVoiceName = Extract<
   EmbeddedVoiceName,
   `a${string}` | `b${string}`
 >;
+export const FRENCH_VOICE_FOR_ENGLISH = "ff_siwis" as const;
+export type SupportedVoiceName =
+  | EnglishVoiceName
+  | typeof FRENCH_VOICE_FOR_ENGLISH;
 type VoiceProvider = (voice: string) => Promise<ArrayBuffer>;
 
 const VOICE_PROVIDER = Symbol.for("kokoro-js.voice-provider");
