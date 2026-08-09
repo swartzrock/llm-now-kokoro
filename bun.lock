@@ -14,6 +14,10 @@
       },
     },
   },
+  "patchedDependencies": {
+    "onnxruntime-node@1.21.0": "patches/onnxruntime-node@1.21.0.patch",
+    "kokoro-js@1.2.1": "patches/kokoro-js@1.2.1.patch",
+  },
   "packages": {
     "@emnapi/runtime": ["@emnapi/runtime@1.11.3", "", { "dependencies": { "tslib": "^2.4.0" } }, "sha512-Xz4Tpyki7XyrpbUK1jR1AhdAdaXyhhY4lZ3neLodmhpuWfy2PAQN5B46sAiU4liOXGLkHypn/qU+jvfWSCYYLA=="],
 
