@@ -8,6 +8,7 @@
   },
   "scripts": {
     "build": "bun run build.ts",
+    "test": "bun test",
     "typecheck": "bun ./node_modules/typescript/bin/tsc --noEmit",
     "smoke:model-cache": "KOKORO_MODEL_CACHE_TEST=1 bun test --timeout 300000 tests/model-cache.integration.test.ts",
     "smoke:standalone": "KOKORO_STANDALONE_TEST=1 bun test --timeout 600000 tests/standalone.integration.test.ts"
