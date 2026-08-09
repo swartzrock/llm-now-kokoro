@@ -2,7 +2,8 @@ import {
   installEmbeddedVoiceProvider,
   verifyEmbeddedVoices,
 } from "./embedded-voices";
-import { prepareNativeRuntime } from "./native-runtime";
+import { errorMessage } from "./error-message";
+import { ADDON_NAME, prepareNativeRuntime } from "./native-runtime";
 import { playAudio, type SavableAudio } from "./playback";
 
 const VOICE_SELF_CHECK_VARIABLE = "KOKORO_STANDALONE_VOICE_SELF_CHECK";
@@ -44,7 +45,7 @@ export function parseTextArgument(arguments_: string[]): string {
 export async function runCli(
   arguments_: string[],
   dependencies: CliDependencies = {},
-): Promise<"spoken" | "voice-self-check"> {
+): Promise<void> {
   const text = parseTextArgument(arguments_);
   const getEnvironment =
     dependencies.getEnvironment ?? ((name: string) => process.env[name]);
@@ -63,13 +64,12 @@ export async function runCli(
         hasAfHeart: voices.includes("af_heart"),
       };
       (dependencies.writeSelfCheck ?? writeSelfCheck)(result);
-      return "voice-self-check";
+      return;
     }
 
     runtime = await (dependencies.prepareRuntime ?? prepareInferenceRuntime)();
     const audio = await (dependencies.synthesize ?? synthesize)(text);
     await (dependencies.play ?? playAudio)(audio);
-    return "spoken";
   } finally {
     try {
       await runtime?.cleanup();
@@ -95,8 +95,7 @@ export async function runCliMain(
 
 async function prepareInferenceRuntime(): Promise<PreparedRuntime> {
   const hasEmbeddedNativeRuntime = Bun.embeddedFiles.some(
-    (file) =>
-      (file as Blob & { name: string }).name === "onnxruntime_binding.node",
+    (file) => (file as Blob & { name: string }).name === ADDON_NAME,
   );
 
   if (!hasEmbeddedNativeRuntime) {
@@ -118,9 +117,4 @@ async function synthesize(text: string): Promise<SavableAudio> {
 
 function writeSelfCheck(result: VoiceSelfCheckResult): void {
   console.log(JSON.stringify(result));
-}
-
-function errorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.split("\n", 1)[0]?.trim() || "unknown error";
 }

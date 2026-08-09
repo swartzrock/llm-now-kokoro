@@ -2,8 +2,9 @@ import { env, type ProgressCallback, type ProgressInfo } from "@huggingface/tran
 import { KokoroTTS } from "kokoro-js";
 
 import { prepareModelCache } from "./cache";
+import { errorMessage } from "./error-message";
 
-export const MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
+const MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
 
 const MODEL_OPTIONS = {
   dtype: "q8",
@@ -92,9 +93,4 @@ function createProgressCallback(
 
 function reportToStderr(message: string): void {
   console.error(message);
-}
-
-function errorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.split("\n", 1)[0]?.trim() || "unknown error";
 }

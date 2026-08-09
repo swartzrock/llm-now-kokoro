@@ -76,9 +76,9 @@ describe("runCli", () => {
       events.push("play");
     };
 
-    await expect(runCli(["  How was your day?  "], dependencies)).resolves.toBe(
-      "spoken",
-    );
+    await expect(
+      runCli(["  How was your day?  "], dependencies),
+    ).resolves.toBeUndefined();
 
     expect(events).toEqual([
       "get-environment",
@@ -131,9 +131,7 @@ describe("runCli", () => {
       selfCheck = result;
     };
 
-    await expect(runCli(["Self check"], dependencies)).resolves.toBe(
-      "voice-self-check",
-    );
+    await expect(runCli(["Self check"], dependencies)).resolves.toBeUndefined();
 
     expect(selfCheck).toEqual({ status: "ok", voiceCount: 54, hasAfHeart: true });
     expect(events).toEqual([

@@ -2,6 +2,8 @@ import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { isAbsolute, join } from "node:path";
 
+import { errorMessage } from "./error-message";
+
 type MakeDirectory = (
   path: string,
   options: { recursive: true },
@@ -36,9 +38,4 @@ export async function prepareModelCache(
   }
 
   return cachePath;
-}
-
-function errorMessage(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.split("\n", 1)[0]?.trim() || "unknown error";
 }

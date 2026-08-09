@@ -48,7 +48,9 @@ test("hands off an absolute addon path and cleans it after a consumer failure", 
     "/tmp/kokoro-cli-onnx-test/libonnxruntime.1.21.0.dylib",
     "/tmp/kokoro-cli-onnx-test/onnxruntime_binding.node",
   ]);
-  expect(environment.KOKORO_ONNX_BINDING_PATH).toBe(runtime.addonPath);
+  expect(environment.KOKORO_ONNX_BINDING_PATH).toBe(
+    "/tmp/kokoro-cli-onnx-test/onnxruntime_binding.node",
+  );
 
   await expect(
     (async () => {

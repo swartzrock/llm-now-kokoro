@@ -9,7 +9,6 @@ import { assertBunVersion } from "../build";
 import {
   EMBEDDED_VOICE_MANIFEST,
   EXPECTED_VOICE_COUNT,
-  loadEmbeddedVoice,
   verifyEmbeddedVoices,
 } from "./embedded-voices";
 
@@ -38,11 +37,6 @@ describe("embedded voices", () => {
 
     expect(verified).toHaveLength(EXPECTED_VOICE_COUNT);
     expect(verified).toContain("af_heart");
-
-    for (const [name, voice] of Object.entries(EMBEDDED_VOICE_MANIFEST)) {
-      const bytes = await loadEmbeddedVoice(name);
-      expect(Bun.CryptoHasher.hash("sha256", bytes, "hex")).toBe(voice.sha256);
-    }
   });
 
   test("lets a standalone provider supply voice bytes", async () => {

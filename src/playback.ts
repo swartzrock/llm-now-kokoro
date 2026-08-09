@@ -2,6 +2,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { errorMessage, firstLine } from "./error-message";
+
 export interface SavableAudio {
   save(path: string): Promise<void>;
 }
@@ -82,12 +84,4 @@ function spawnAfplay(
     exited: child.exited,
     stderr: child.stderr,
   };
-}
-
-function errorMessage(error: unknown): string {
-  return firstLine(error instanceof Error ? error.message : String(error)) || "unknown error";
-}
-
-function firstLine(message: string): string {
-  return message.split("\n", 1)[0]?.trim() ?? "";
 }

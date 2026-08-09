@@ -2,21 +2,22 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-const ADDON_NAME = "onnxruntime_binding.node";
-const DYLIB_NAME = "libonnxruntime.1.21.0.dylib";
+export const ADDON_NAME = "onnxruntime_binding.node";
+export const DYLIB_NAME = "libonnxruntime.1.21.0.dylib";
 const BINDING_PATH_VARIABLE = "KOKORO_ONNX_BINDING_PATH";
+
+type EmbeddedAsset = Blob | Uint8Array;
 
 export interface NativeRuntimeDependencies {
   makeTempDirectory?: () => Promise<string>;
-  readAsset?: (path: string) => Promise<Uint8Array>;
-  writeAsset?: (path: string, bytes: Uint8Array) => Promise<void>;
+  readAsset?: (path: string) => Promise<EmbeddedAsset>;
+  writeAsset?: (path: string, asset: EmbeddedAsset) => Promise<void>;
   removeDirectory?: (directory: string) => Promise<void>;
   getBindingPath?: () => string | undefined;
   setBindingPath?: (path: string | undefined) => void;
 }
 
 export interface PreparedNativeRuntime {
-  addonPath: string;
   cleanup: () => Promise<void>;
 }
 
@@ -30,8 +31,8 @@ export async function prepareNativeRuntime(
     dependencies.readAsset ?? readEmbeddedAsset;
   const writeAsset =
     dependencies.writeAsset ??
-    (async (path: string, bytes: Uint8Array) => {
-      await Bun.write(path, bytes);
+    (async (path: string, asset: EmbeddedAsset) => {
+      await Bun.write(path, asset);
     });
   const removeDirectory =
     dependencies.removeDirectory ??
@@ -67,7 +68,6 @@ export async function prepareNativeRuntime(
   }
 
   return {
-    addonPath,
     cleanup: async () => {
       if (cleaned) return;
       cleaned = true;
@@ -77,7 +77,7 @@ export async function prepareNativeRuntime(
   };
 }
 
-async function readEmbeddedAsset(name: string): Promise<Uint8Array> {
+async function readEmbeddedAsset(name: string): Promise<Blob> {
   const asset = Bun.embeddedFiles.find(
     (file) => (file as Blob & { name: string }).name === name,
   );
@@ -85,5 +85,5 @@ async function readEmbeddedAsset(name: string): Promise<Uint8Array> {
     throw new Error(`Embedded native runtime asset not found: ${name}`);
   }
 
-  return new Uint8Array(await asset.arrayBuffer());
+  return asset;
 }

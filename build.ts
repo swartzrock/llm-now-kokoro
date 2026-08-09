@@ -6,8 +6,9 @@ import {
   EXPECTED_VOICE_COUNT,
   type EmbeddedVoiceName,
 } from "./src/embedded-voices";
+import { ADDON_NAME, DYLIB_NAME } from "./src/native-runtime";
 
-export const REQUIRED_BUN_VERSION = "1.3.14";
+const REQUIRED_BUN_VERSION = "1.3.14";
 
 const ROOT_DIRECTORY = import.meta.dir;
 const VOICE_DIRECTORY = resolve(ROOT_DIRECTORY, "node_modules/kokoro-js/voices");
@@ -20,10 +21,9 @@ const NATIVE_DIRECTORY = resolve(
   process.platform,
   process.arch,
 );
-const NATIVE_ASSETS = [
-  resolve(NATIVE_DIRECTORY, "onnxruntime_binding.node"),
-  resolve(NATIVE_DIRECTORY, "libonnxruntime.1.21.0.dylib"),
-];
+const NATIVE_ASSETS = [ADDON_NAME, DYLIB_NAME].map((name) =>
+  resolve(NATIVE_DIRECTORY, name),
+);
 
 export function assertBunVersion(actualVersion = Bun.version): void {
   if (actualVersion !== REQUIRED_BUN_VERSION) {
@@ -33,17 +33,17 @@ export function assertBunVersion(actualVersion = Bun.version): void {
   }
 }
 
-export async function verifyPinnedVoicePackage(): Promise<void> {
+async function verifyPinnedVoicePackage(): Promise<void> {
   const packageVoices = (await readdir(VOICE_DIRECTORY))
     .filter((name) => name.endsWith(".bin"))
     .sort();
-  const manifestVoices = Object.keys(EMBEDDED_VOICE_MANIFEST)
-    .map((name) => `${name}.bin`)
+  const manifestVoices = Object.values(EMBEDDED_VOICE_MANIFEST)
+    .map((entry) => entry.file)
     .sort();
 
   if (
     packageVoices.length !== EXPECTED_VOICE_COUNT ||
-    !packageVoices.includes("af_heart.bin") ||
+    !packageVoices.includes(EMBEDDED_VOICE_MANIFEST.af_heart.file) ||
     packageVoices.join("\n") !== manifestVoices.join("\n")
   ) {
     throw new Error(
@@ -52,10 +52,11 @@ export async function verifyPinnedVoicePackage(): Promise<void> {
   }
 
   for (const name of Object.keys(EMBEDDED_VOICE_MANIFEST) as EmbeddedVoiceName[]) {
-    const bytes = await Bun.file(resolve(VOICE_DIRECTORY, `${name}.bin`)).arrayBuffer();
+    const entry = EMBEDDED_VOICE_MANIFEST[name];
+    const bytes = await Bun.file(resolve(VOICE_DIRECTORY, entry.file)).arrayBuffer();
     const actual = Bun.CryptoHasher.hash("sha256", bytes, "hex");
-    if (actual !== EMBEDDED_VOICE_MANIFEST[name].sha256) {
-      throw new Error(`kokoro-js voice hash mismatch for ${name}.bin`);
+    if (actual !== entry.sha256) {
+      throw new Error(`kokoro-js voice hash mismatch for ${entry.file}`);
     }
   }
 }

@@ -3,6 +3,8 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
 import { assertBunVersion } from "../build";
+import { EXPECTED_VOICE_COUNT } from "../src/embedded-voices";
+import { ADDON_NAME, DYLIB_NAME } from "../src/native-runtime";
 
 interface CommandResult {
   stdout: string;
@@ -60,7 +62,7 @@ export async function verifyStandalone(
     });
     const selfCheckResult = parseLastJsonLine(selfCheck.stdout);
     if (
-      selfCheckResult.voiceCount !== 54 ||
+      selfCheckResult.voiceCount !== EXPECTED_VOICE_COUNT ||
       selfCheckResult.hasAfHeart !== true ||
       selfCheckResult.status !== "ok"
     ) {
@@ -178,10 +180,7 @@ function auditLoadedPaths(
     throw new Error(`Standalone loaded project dependency paths: ${forbidden.join(", ")}`);
   }
 
-  for (const name of [
-    "onnxruntime_binding.node",
-    "libonnxruntime.1.21.0.dylib",
-  ]) {
+  for (const name of [ADDON_NAME, DYLIB_NAME]) {
     const line = loadedPaths.find((candidate) => candidate.includes(name));
     if (!line || !line.includes(runtimeTemp)) {
       throw new Error(`Standalone native path audit did not find ephemeral ${name}`);
