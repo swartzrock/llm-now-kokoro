@@ -6,7 +6,7 @@ import { KokoroTTS } from "kokoro-js";
 
 import { prepareModelCache } from "./cache";
 import {
-  FRENCH_VOICE_FOR_ENGLISH,
+  EMBEDDED_VOICE_MANIFEST,
   type SupportedVoiceName,
 } from "./embedded-voices";
 import { errorMessage } from "./error-message";
@@ -98,10 +98,17 @@ async function createKokoroModel(
   const model = await KokoroTTS.from_pretrained(modelId, options);
   const validateVoice = model._validate_voice.bind(model);
 
-  model._validate_voice = (voice: unknown) =>
-    voice === FRENCH_VOICE_FOR_ENGLISH ? "a" : validateVoice(voice);
+  model._validate_voice = (voice: unknown) => {
+    if (
+      typeof voice === "string" &&
+      Object.hasOwn(EMBEDDED_VOICE_MANIFEST, voice)
+    ) {
+      return voice.startsWith("b") ? "b" : "a";
+    }
+    return validateVoice(voice);
+  };
 
-  // kokoro-js 1.2.1 ships ff_siwis.bin but omits it from its public voice type.
+  // kokoro-js 1.2.1 ships multilingual voice files but omits them from its public type.
   return model as unknown as SpeechModel;
 }
 

@@ -1,6 +1,5 @@
 import {
   EMBEDDED_VOICE_MANIFEST,
-  FRENCH_VOICE_FOR_ENGLISH,
   installEmbeddedVoiceProvider,
   type SupportedVoiceName,
   verifyEmbeddedVoices,
@@ -13,7 +12,7 @@ const VOICE_SELF_CHECK_VARIABLE = "KOKORO_STANDALONE_VOICE_SELF_CHECK";
 
 export const DEFAULT_VOICE: SupportedVoiceName = "af_heart";
 export const SUPPORTED_VOICES = Object.freeze(
-  Object.keys(EMBEDDED_VOICE_MANIFEST).filter(isSupportedVoice),
+  Object.keys(EMBEDDED_VOICE_MANIFEST) as SupportedVoiceName[],
 );
 const USAGE = 'Usage: kokoro-cli [--voice <voice>] "text to speak"';
 export const HELP_TEXT = `${USAGE}
@@ -24,8 +23,8 @@ Options:
   --voice <voice>  Select an embedded voice (default: ${DEFAULT_VOICE})
   --help           Show this help
 
-Voice examples: af_heart, af_bella, am_adam, bf_emma, ff_siwis
-${SUPPORTED_VOICES.length} voices are available. ff_siwis uses English pronunciation with French timbre.`;
+Voice examples: af_heart, bf_emma, ef_dora, ff_siwis, jf_alpha, zf_xiaobei
+All ${SUPPORTED_VOICES.length} embedded voices use English pronunciation.`;
 
 interface PreparedRuntime {
   cleanup(): Promise<void>;
@@ -110,11 +109,7 @@ export function parseCliArguments(arguments_: string[]): CliCommand {
 }
 
 function isSupportedVoice(voice: string): voice is SupportedVoiceName {
-  return (
-    voice === FRENCH_VOICE_FOR_ENGLISH ||
-    ((voice.startsWith("a") || voice.startsWith("b")) &&
-      Object.hasOwn(EMBEDDED_VOICE_MANIFEST, voice))
-  );
+  return Object.hasOwn(EMBEDDED_VOICE_MANIFEST, voice);
 }
 
 export async function runCli(

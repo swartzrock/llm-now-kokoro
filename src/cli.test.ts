@@ -58,16 +58,23 @@ describe("parseCliArguments", () => {
       text: "Hello",
       voice: "bf_emma",
     });
-    expect(parseCliArguments(["--voice", "ff_siwis", "Hello"])).toEqual({
-      kind: "speak",
-      text: "Hello",
-      voice: "ff_siwis",
-    });
+    for (const voice of [
+      "ef_dora",
+      "ff_siwis",
+      "jf_alpha",
+      "zf_xiaobei",
+    ] as const) {
+      expect(parseCliArguments(["--voice", voice, "Hello"])).toEqual({
+        kind: "speak",
+        text: "Hello",
+        voice,
+      });
+    }
   });
 
   test("returns the help command", () => {
     expect(parseCliArguments(["--help"])).toEqual({ kind: "help" });
-    expect(SUPPORTED_VOICES).toHaveLength(29);
+    expect(SUPPORTED_VOICES).toHaveLength(54);
   });
 
   test.each([
@@ -75,7 +82,6 @@ describe("parseCliArguments", () => {
     [["   \t\n"], "Text must contain non-whitespace characters."],
     [["hello", "world"], 'Usage: kokoro-cli [--voice <voice>] "text to speak"'],
     [["--voice", "not_a_voice", "Hello"], "Unknown voice: not_a_voice"],
-    [["--voice", "ef_dora", "Hello"], "Unknown voice: ef_dora"],
     [["--voice", "Hello"], "--voice requires a voice name and one text argument."],
     [["--unknown", "Hello"], "Unknown option: --unknown"],
   ])("rejects invalid arguments", (arguments_, message) => {
@@ -148,9 +154,9 @@ describe("runCli", () => {
       return { save: async () => {} };
     };
 
-    await runCli(["--voice", "ff_siwis", "Hello"], dependencies);
+    await runCli(["--voice", "jf_alpha", "Hello"], dependencies);
 
-    expect(events).toContain("synthesize:ff_siwis:Hello");
+    expect(events).toContain("synthesize:jf_alpha:Hello");
   });
 
   test("cleans native and voice state after synthesis fails", async () => {

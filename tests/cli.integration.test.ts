@@ -56,6 +56,7 @@ describe("source CLI argument validation", () => {
       );
       expect(result.stdout).toContain("--voice <voice>");
       expect(result.stdout).toContain("ff_siwis");
+      expect(result.stdout).toContain("54 embedded voices");
       expect(result.stderr).toBe("");
       expect(
         await Bun.file(

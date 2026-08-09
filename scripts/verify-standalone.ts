@@ -3,10 +3,7 @@ import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 
 import { assertBunVersion } from "../build";
-import {
-  EXPECTED_VOICE_COUNT,
-  FRENCH_VOICE_FOR_ENGLISH,
-} from "../src/embedded-voices";
+import { EXPECTED_VOICE_COUNT } from "../src/embedded-voices";
 import { ADDON_NAME, DYLIB_NAME } from "../src/native-runtime";
 
 interface CommandResult {
@@ -58,7 +55,7 @@ export async function verifyStandalone(
       LANG: process.env.LANG ?? "en_US.UTF-8",
       NO_COLOR: "1",
     };
-    const frenchVoiceArguments = ["--voice", FRENCH_VOICE_FOR_ENGLISH];
+    const multilingualVoiceArguments = ["--voice", "jf_alpha"];
 
     const selfCheck = await run(copiedBinary, ["Embedded voice self-check."], room, {
       ...baseEnvironment,
@@ -75,7 +72,7 @@ export async function verifyStandalone(
 
     const cold = await run(
       copiedBinary,
-      [...frenchVoiceArguments, "Standalone cold-cache playback check."],
+      [...multilingualVoiceArguments, "Standalone cold-cache playback check."],
       room,
       { ...baseEnvironment, DYLD_PRINT_LIBRARIES: "1" },
     );
@@ -88,7 +85,7 @@ export async function verifyStandalone(
 
     const warm = await run(
       copiedBinary,
-      [...frenchVoiceArguments, "Standalone warm offline playback check."],
+      [...multilingualVoiceArguments, "Standalone warm offline playback check."],
       room,
       { ...baseEnvironment, KOKORO_OFFLINE: "1" },
     );

@@ -11,7 +11,7 @@ async function runSynthesis(homeDirectory: string, allowRemoteModels: boolean) {
     import { env } from "@huggingface/transformers";
     import { synthesizeSpeech } from ${JSON.stringify(ttsModulePath)};
     env.allowRemoteModels = ${allowRemoteModels};
-    const result = await synthesizeSpeech("Model cache integration check.", "ff_siwis", {
+    const result = await synthesizeSpeech("Model cache integration check.", "jf_alpha", {
       homeDirectory: process.env.KOKORO_TEST_HOME,
     });
     if (result.audio.length === 0) process.exit(1);
