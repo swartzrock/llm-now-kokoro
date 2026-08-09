@@ -37,8 +37,7 @@ Source-mode success does not establish that the executable is self-contained. Th
 **Input and speech behavior**
 
 - R1. The CLI accepts exactly one positional argument containing non-whitespace text and rejects missing, blank, or additional arguments before loading the model.
-- R2. V1 accepts short utterances up to 200 Unicode code points and rejects longer text instead of allowing Kokoro to truncate it silently.
-- R3. Every valid invocation uses `onnx-community/Kokoro-82M-v1.0-ONNX`, `dtype: "q8"`, `device: "cpu"`, and voice `af_heart` with no user-selectable alternatives.
+- R3. Every valid invocation uses `onnx-community/Kokoro-82M-v1.0-ONNX`, `dtype: "q8"`, `device: "cpu"`, voice `af_heart`, and speed `1.0` with no user-selectable alternatives.
 - R4. A successful invocation returns only after `/usr/bin/afplay` finishes playing the generated speech through the macOS default audio output.
 
 **Packaging and caching**
@@ -60,12 +59,12 @@ Source-mode success does not establish that the executable is self-contained. Th
   - **Trigger:** The user runs the source entry point or compiled executable with one quoted text argument.
   - **Steps:** Validate input, prepare the writable cache, load the fixed q8 model, synthesize with `af_heart`, write a temporary WAV, play it with `afplay`, and clean up.
   - **Outcome:** Speech finishes and the process exits successfully, or the process exits nonzero with cleanup complete.
-  - **Covered by:** R1-R4, R7, R9-R11
+  - **Covered by:** R1, R3, R4, R7, R9-R11
 
 ### Acceptance Examples
 
 - AE1. Cold source-mode run
-  - **Covers:** F1, R1-R4, R7, R11
+  - **Covers:** F1, R1, R3, R4, R7, R11
   - **Given:** The model cache is empty and the machine can reach Hugging Face.
   - **When:** The user runs `bun index.ts "How was your day?"`.
   - **Then:** The CLI downloads the q8 artifacts into the user cache, speaks with `af_heart`, and exits after playback.
@@ -80,9 +79,9 @@ Source-mode success does not establish that the executable is self-contained. Th
   - **When:** The executable speaks a valid utterance with an empty cache and then repeats with a warm cache and remote access disabled.
   - **Then:** Both runs succeed, all voice assets remain available, and no persistent native sidecars are created.
 - AE4. Invalid arguments
-  - **Covers:** R1, R2, R9
+  - **Covers:** R1, R9
   - **Given:** The model is not loaded.
-  - **When:** The user supplies no argument, whitespace, multiple arguments, or more than 200 Unicode code points.
+  - **When:** The user supplies no argument, whitespace, or multiple arguments.
   - **Then:** The CLI writes usage or validation guidance to stderr and exits nonzero without downloading or synthesizing.
 - AE5. Playback failure
   - **Covers:** R4, R9, R10
@@ -120,11 +119,11 @@ Source-mode success does not establish that the executable is self-contained. Th
 ### Key Technical Decisions
 
 - KTD1. **Embed voices and cache model weights.** (session-settled: user-directed — chosen over embedding the q8 model weights: the executable should include Kokoro and its voices while keeping the large model in a reusable first-run cache.) Governs R5-R7.
-- KTD2. **Use Bun as the only project runtime and toolchain.** (session-settled: user-directed — chosen over a browser or Node-specific application: the CLI already uses Bun for TypeScript execution and native compilation.) Follow `CLAUDE.md` for install, build, test, subprocess, and file APIs. Governs R1-R11.
+- KTD2. **Use Bun as the only project runtime and toolchain.** (session-settled: user-directed — chosen over a browser or Node-specific application: the CLI already uses Bun for TypeScript execution and native compilation.) Pin Bun 1.3.14 in project metadata and fail the build or standalone verification on another version until it is qualified. Follow `CLAUDE.md` for install, build, test, subprocess, and file APIs. Governs R1, R3-R11.
 - KTD3. **Pin the researched dependency line.** Pin `kokoro-js` to `1.2.1` and `@huggingface/transformers` to `3.5.1`, retain `onnxruntime-node` `1.21.0` through the lockfile, and defer the incompatible major-version survey. Exact pins keep the private asset adapters tied to one reviewed package layout.
-- KTD4. **Make standalone inference a release gate.** The first compiled proof must load the host native addon and companion dylib, read embedded `af_heart`, open the q8 model, and synthesize with project `node_modules` unavailable. Failure triggers the Goal Capsule stop condition rather than a fallback architecture.
+- KTD4. **Make standalone inference a release gate.** The first compiled proof must load every required transitive native dependency, read embedded `af_heart`, open the q8 model, and synthesize with project `node_modules` unavailable. The proof must account for Transformers.js's optional Sharp image backend as well as the ONNX addon and companion dylib; remove the unused image backend from the TTS-only compiled graph if it would otherwise introduce another native sidecar. Failure triggers the Goal Capsule stop condition rather than a fallback architecture.
 - KTD5. **Use a pinned dependency patch for voice injection.** Add the smallest `bun patch` needed for Kokoro's private voice loader to accept an embedded voice-byte provider while preserving its packaged-filesystem behavior in source mode. Do not vendor the entire library or depend on the neighboring checkout.
-- KTD6. **Treat native runtime extraction as ephemeral executable internals.** If Bun cannot colocate the ONNX addon and dylib automatically, a pinned runtime adapter may materialize both from embedded bytes into one unique temporary directory before dynamically importing Kokoro. It must clean the directory after inference and must not install persistent sidecars.
+- KTD6. **Treat native runtime extraction as ephemeral executable internals.** If Bun cannot colocate the ONNX addon and dylib automatically, a pinned runtime adapter may materialize both from embedded bytes into one unique temporary directory before dynamically importing Kokoro. The adapter and pinned ONNX loader patch must share an explicit absolute-addon-path handoff while preserving the original package-relative lookup in source mode. The dylib remains beside the addon, and the adapter cleans the directory after success or failure without installing persistent sidecars.
 - KTD7. **Use the macOS cache convention.** Set Kokoro's exported `env.cacheDir` before model construction to the absolute `~/Library/Caches/kokoro-cli/transformers` path. The cache remains disposable and user-removable.
 - KTD8. **Keep parsing and playback dependency-free.** Validate the single positional argument with a small pure function. Save synthesized audio into a collision-safe temporary directory, spawn `/usr/bin/afplay` with an argument array, await its exit, and clean up in `finally`.
 - KTD9. **Keep automated tests offline by default.** Unit tests use injected synthesis, filesystem, and subprocess seams. Network/model and standalone-binary tests run as explicit integration gates.
@@ -135,7 +134,7 @@ Source-mode success does not establish that the executable is self-contained. Th
 
 ```mermaid
 flowchart TB
-  A["One quoted text argument"] --> B{"Valid short utterance?"}
+  A["One quoted text argument"] --> B{"Valid input?"}
   B -->|"No"| C["Usage or validation error"]
   B -->|"Yes"| D["Configure user model cache"]
   D --> E["Load pinned q8 Kokoro model"]
@@ -171,6 +170,7 @@ U1 establishes the smallest source-mode synthesis core and cache behavior. U2 co
 ### Risks and Dependencies
 
 - **Native ONNX loading:** Transformers.js detects Bun as Node and `onnxruntime-node` selects its addon through a computed path. The macOS addon also requires `libonnxruntime.1.21.0.dylib` beside it. KTD4 and U2 contain this risk before CLI polish.
+- **Transitive Sharp loading:** Transformers.js also imports an optional native Sharp image backend that TTS does not use. U2 must prove Bun removes it from the compiled graph or apply a narrow TTS-only alias so it cannot create an undeclared native runtime dependency.
 - **Bun documentation drift:** Current online documentation describes directory asset support that is absent from the local Bun 1.3.14 API surface. U2 must target the installed version's static file imports or extra asset entrypoints and verify the generated layout instead of assuming newer `compile.assets` behavior.
 - **Kokoro private loader:** `kokoro-js` resolves `../voices/<id>.bin` dynamically and does not export a Node voice-path override. KTD5 keeps the adaptation version-pinned and narrow.
 - **Mutable model source:** Kokoro's wrapper does not expose a Hugging Face revision, and Transformers.js 3.5.1 reuses URL-keyed cached files without checksum revalidation. V1 documents cache deletion as corruption recovery rather than adding a custom downloader.
@@ -197,9 +197,10 @@ U1 establishes the smallest source-mode synthesis core and cache behavior. U2 co
 - **Files:** `package.json`, `bun.lock`, `src/cache.ts`, `src/tts.ts`, `src/cache.test.ts`, `src/tts.test.ts`, `tests/model-cache.integration.test.ts`
 - **Approach:**
   1. Add exact runtime dependency versions and Bun scripts without introducing a CLI framework.
-  2. Derive and create the absolute macOS cache directory before constructing the model.
-  3. Encapsulate fixed model, dtype, device, and voice settings behind a synthesis seam that accepts progress and error reporting.
-  4. Keep the network-dependent cold/warm cache proof outside the default unit-test suite.
+  2. Pin Bun 1.3.14 in project metadata.
+  3. Derive and create the absolute macOS cache directory before constructing the model.
+  4. Encapsulate fixed model, dtype, device, voice, and speed settings behind a synthesis seam that accepts progress and error reporting.
+  5. Keep the network-dependent cold/warm cache proof outside the default unit-test suite.
 - **Execution note:** Build the smallest real synthesis path needed by U2. Do not add playback or option parsing yet.
 - **Patterns to follow:** Bun-only commands and APIs from `CLAUDE.md`; Kokoro usage from the pinned package README.
 - **Test scenarios:**
@@ -215,59 +216,66 @@ U1 establishes the smallest source-mode synthesis core and cache behavior. U2 co
 - **Goal:** Produce a current-host macOS executable that passes the clean-room synthesis contract before user-facing CLI work continues.
 - **Requirements:** R5, R6, R8, R10
 - **Dependencies:** U1
-- **Files:** `build.ts`, `package.json`, `bun.lock`, `.gitignore`, `src/embedded-voices.ts`, `src/embedded-voices.test.ts`, `scripts/verify-standalone.ts`, `tests/standalone.integration.test.ts`, `patches/kokoro-js@1.2.1.patch`; conditional only if Bun's default native extraction fails: `src/native-runtime.ts`, `patches/onnxruntime-node@1.21.0.patch`
+- **Files:** `build.ts`, `package.json`, `bun.lock`, `.gitignore`, `src/embedded-voices.ts`, `src/embedded-voices.test.ts`, `scripts/standalone-entry.ts`, `scripts/verify-standalone.ts`, `tests/standalone.integration.test.ts`, `patches/kokoro-js@1.2.1.patch`; conditional only if Bun's default native extraction fails: `src/native-runtime.ts`, `patches/onnxruntime-node@1.21.0.patch`
 - **Approach:**
   1. Expand the pinned package's voice directory at build time, assert the expected manifest and `af_heart.bin`, and embed each binary through a Bun 1.3.14-supported asset path with stable basenames.
   2. Patch Kokoro's private loader only enough to resolve voice bytes from the executable while retaining source-mode filesystem reads.
-  3. Statically account for the host ONNX addon and companion dylib. Use an ephemeral colocated materialization adapter only if Bun's default extraction is insufficient.
-  4. Compile the executable and run it outside the repository with project `node_modules` unavailable.
-  5. Exercise empty-cache online inference followed by warm-cache offline inference. Apply the Goal Capsule stop condition if either run fails.
+  3. Compile a minimal proof entry point that synthesizes a fixed short utterance without pulling user-facing parsing or playback into this unit.
+  4. Audit the compiled graph for transitive native dependencies. Eliminate the unused Sharp image backend from the TTS-only build, then statically account for the host ONNX addon and companion dylib. Use an ephemeral colocated materialization adapter only if Bun's default extraction is insufficient.
+  5. Run the executable with a fresh home directory and the repository and project `node_modules` unavailable, then verify loaded non-system paths are limited to the executable, the dedicated model cache, and ephemeral runtime materialization.
+  6. Exercise empty-cache online inference followed by a fresh-process warm-cache run with remote model loading disabled. Apply the Goal Capsule stop condition if either run fails.
 - **Execution note:** Treat this unit as a feasibility gate. Remove any abandoned patch or extraction approach before proceeding.
 - **Patterns to follow:** Bun executable asset and Node-API documentation; the pinned Kokoro and ONNX package layouts captured under Sources and Research.
 - **Test scenarios:**
   1. The build fails before compilation if the pinned package does not contain exactly the expected 54 voice files or lacks `af_heart.bin`.
-  2. The embedded registry exposes every shipped voice basename and resolves `af_heart` to the original bytes.
-  3. Source mode continues reading package voice files without depending on executable-only globals.
-  4. Covers AE3. The compiled binary runs from a clean temporary directory with project `node_modules` unavailable, downloads q8 into an empty cache, and synthesizes non-empty audio.
-  5. Covers AE3. The same isolated binary repeats with remote model access disabled and a warm cache.
-  6. The isolated run leaves no native addon, dylib, or voice sidecar after process cleanup.
+  2. The build or standalone verifier fails before compilation when the active Bun version is not 1.3.14.
+  3. The embedded registry exposes every shipped voice basename and records a build-time hash for each original voice file.
+  4. Source mode continues reading package voice files without depending on executable-only globals.
+  5. Covers AE3. The compiled binary runs from a clean temporary directory with project `node_modules` unavailable, downloads q8 into an empty cache, and synthesizes non-empty audio.
+  6. Covers AE3. A fresh isolated process repeats with `allowRemoteModels` disabled and a warm cache; any attempted remote fetch fails the test.
+  7. A compiled self-check enumerates all 54 embedded voice assets and verifies their bytes against the build-time hash manifest.
+  8. The isolated run leaves no native addon, dylib, or voice sidecar after process cleanup.
+  9. If native materialization is required, a forced failure after extraction still removes the unique native-runtime directory before exit.
 - **Verification:** The compiled executable passes the clean-room cold/warm inference gate on the current macOS host architecture. Failure stops implementation rather than activating a fallback.
 
 ### U3. Add positional CLI behavior and macOS playback
 
 - **Goal:** Turn the proven synthesis path into the requested one-command speaking experience.
-- **Requirements:** R1-R4, R9-R11; F1
+- **Requirements:** R1, R3, R4, R9-R11; F1
 - **Dependencies:** U2
-- **Files:** `index.ts`, `src/cli.ts`, `src/playback.ts`, `src/cli.test.ts`, `src/playback.test.ts`, `tests/cli.integration.test.ts`
+- **Files:** `index.ts`, `build.ts`, `package.json`, `src/cli.ts`, `src/playback.ts`, `src/cli.test.ts`, `src/playback.test.ts`, `tests/cli.integration.test.ts`; remove the U2-only `scripts/standalone-entry.ts` after retargeting the production build
 - **Approach:**
-  1. Keep `index.ts` as a guarded entry point and separate pure argument validation from orchestration.
-  2. Reject invalid or oversized input before cache creation or model loading.
-  3. Write synthesized audio to a unique temporary directory and call `/usr/bin/afplay` through an argument array.
-  4. Await playback, convert nonzero process status into a CLI failure, and clean the temporary directory in `finally`.
-  5. Keep stdout free for future machine-readable use and send status, usage, and diagnostics to stderr.
+  1. Retarget the production build from the U2 proof entry point to `index.ts`, then remove the proof entry point so the final standalone gate can exercise only the shipped CLI artifact.
+  2. Keep `index.ts` as a guarded entry point and separate pure argument validation from orchestration.
+  3. Reject invalid argument shapes before cache creation or model loading.
+  4. Write synthesized audio to a unique temporary directory and call `/usr/bin/afplay` through an argument array.
+  5. Await playback, convert nonzero process status into a CLI failure, and clean the temporary directory in `finally`.
+  6. Keep stdout free for future machine-readable use and send status, usage, and diagnostics to stderr.
 - **Execution note:** Write argument and cleanup behavior against injected seams before wiring the real model and subprocess.
 - **Patterns to follow:** Bun `import.meta.main`, `Bun.spawn`, and Bun test APIs from `CLAUDE.md` and upstream documentation.
 - **Test scenarios:**
   1. Covers AE4. Zero arguments return usage failure without calling cache or synthesis dependencies.
   2. Covers AE4. Whitespace-only input returns validation failure without loading the model.
   3. Covers AE4. Two positional arguments return usage failure and do not silently join the text.
-  4. Covers AE4. An input of 201 Unicode code points returns a length failure before synthesis.
-  5. A valid quoted input passes its exact text to the synthesizer and always requests `af_heart`.
-  6. Playback waits for `afplay` to exit before removing the WAV and returning success.
-  7. Covers AE5. A nonzero `afplay` exit reports failure and removes the temporary directory.
-  8. A synthesis exception also removes any temporary directory created by the invocation.
-  9. Covers AE1. With an empty cache, the source entry point emits concise model-loading activity on stderr, speaks a valid short utterance through the real q8 model, and exits after audio completes.
-- **Verification:** Offline unit and integration tests prove orchestration and cleanup. A real source-mode smoke test produces audible speech on the host Mac.
+  4. A valid quoted input passes its exact text to the synthesizer and always requests `af_heart` at speed `1.0`.
+  5. Playback invokes exactly `/usr/bin/afplay` with an argument array containing the generated WAV path, without a shell, and waits for exit before cleanup.
+  6. Covers AE5. A nonzero `afplay` exit reports failure and removes the temporary directory.
+  7. Cache-creation, download, model-load, and synthesis failures emit concise stderr diagnostics, exit nonzero, and do not expose a normal-operation stack trace.
+  8. A synthesis exception removes any temporary directory created by the invocation.
+  9. A WAV-write failure after temporary-directory creation reports failure and removes the directory.
+  10. Covers AE1. With an empty cache, the source entry point emits concise model-loading activity on stderr, speaks a valid short utterance through the real q8 model, and exits after audio completes.
+  11. After the production build is retargeted, the final `dist/kokoro-cli` repeats U2's fresh-home path audit, compiled voice self-check, cold-cache run, and fresh-process offline run.
+- **Verification:** Offline unit and integration tests prove orchestration and cleanup. Real source-mode and final compiled-artifact smoke tests produce audible speech on the host Mac.
 
 ### U4. Document and verify the distributable CLI
 
 - **Goal:** Make first-run cost, platform limits, cache recovery, build output, and manual verification discoverable.
-- **Requirements:** R1-R11; AE1-AE5
+- **Requirements:** R1, R3-R11; AE1-AE5
 - **Dependencies:** U3
 - **Files:** `README.md`, `package.json`, `.gitignore`
 - **Approach:**
-  1. Document source and executable invocation, exact quoting behavior, the 200-code-point limit, fixed voice/model choices, and macOS-only support.
-  2. Document the approximately 92.4 MB first-run q8 download, cache location, warm offline reuse, and delete-cache recovery for corrupt artifacts.
+  1. Document source and executable invocation, exact quoting behavior, fixed voice/model choices, and macOS-only support.
+  2. Measure the cold-cache integration run's cache growth and document that dated, approximate total first-run download range, the included artifacts, cache location, warm offline reuse, and delete-cache recovery for corrupt artifacts.
   3. Expose focused Bun scripts for type checking, offline tests, build, model-cache integration, and clean-room standalone verification.
   4. Run the complete verification contract and record any unavoidable host-specific manual gap in the pull request rather than weakening the checks.
 - **Test expectation:** None -- this unit documents and exposes behavior already proved by U1-U3.
@@ -293,7 +301,7 @@ The network/model and audible playback gates are explicit integration checks. Th
 
 ## Definition of Done
 
-- R1-R11 are implemented and traced through the passing unit and integration gates.
+- R1 and R3-R11 are implemented and traced through the passing unit and integration gates.
 - U1's cold-cache and warm-offline model tests pass with the pinned q8 model.
 - U2's isolated executable passes on the current host architecture with all 54 voice profiles embedded and no project dependencies or persistent native sidecars.
 - U3 speaks the exact valid argument with `af_heart`, waits for playback, and cleans temporary artifacts on every tested exit path.
