@@ -54,7 +54,10 @@ export async function verifyStandalone(
       NO_COLOR: "1",
     };
 
-    const selfCheck = await run(copiedBinary, ["--self-check"], room, baseEnvironment);
+    const selfCheck = await run(copiedBinary, ["Embedded voice self-check."], room, {
+      ...baseEnvironment,
+      KOKORO_STANDALONE_VOICE_SELF_CHECK: "1",
+    });
     const selfCheckResult = parseLastJsonLine(selfCheck.stdout);
     if (
       selfCheckResult.voiceCount !== 54 ||
@@ -64,22 +67,22 @@ export async function verifyStandalone(
       throw new Error(`Standalone embedded-voice self-check failed: ${selfCheck.stdout}`);
     }
 
-    const cold = await run(copiedBinary, [], room, {
+    const cold = await run(copiedBinary, ["Standalone cold-cache playback check."], room, {
       ...baseEnvironment,
       DYLD_PRINT_LIBRARIES: "1",
     });
-    assertNonEmptySynthesis("cold", cold);
+    assertCompletedSpeech("cold", cold);
     const pathAudit = auditLoadedPaths(
       cold.stderr,
       resolve(import.meta.dir, ".."),
       runtimeTemp,
     );
 
-    const warm = await run(copiedBinary, [], room, {
+    const warm = await run(copiedBinary, ["Standalone warm offline playback check."], room, {
       ...baseEnvironment,
       KOKORO_OFFLINE: "1",
     });
-    assertNonEmptySynthesis("warm offline", warm);
+    assertCompletedSpeech("warm offline", warm);
 
     const sidecars = [
       ...(await findSidecars(room)),
@@ -137,14 +140,12 @@ async function run(
   return result;
 }
 
-function assertNonEmptySynthesis(label: string, result: CommandResult): void {
-  const parsed = parseLastJsonLine(result.stdout);
-  if (
-    parsed.status !== "ok" ||
-    typeof parsed.samples !== "number" ||
-    parsed.samples <= 0
-  ) {
-    throw new Error(`${label} standalone synthesis was empty: ${result.stdout}`);
+function assertCompletedSpeech(label: string, result: CommandResult): void {
+  if (result.stdout !== "") {
+    throw new Error(`${label} standalone CLI unexpectedly wrote to stdout`);
+  }
+  if (!result.stderr.includes("Loading Kokoro q8 model")) {
+    throw new Error(`${label} standalone CLI did not report model loading`);
   }
 }
 
@@ -196,7 +197,7 @@ async function findSidecars(directory: string): Promise<string[]> {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) {
       sidecars.push(...(await findSidecars(path)));
-    } else if (/\.(?:bin|dylib|node)$/.test(entry.name)) {
+    } else if (/\.(?:bin|dylib|node|wav)$/.test(entry.name)) {
       sidecars.push(path);
     }
   }

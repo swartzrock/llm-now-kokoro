@@ -75,7 +75,7 @@ export async function buildStandalone(): Promise<void> {
 
   const result = await Bun.build({
     entrypoints: [
-      resolve(ROOT_DIRECTORY, "scripts/standalone-entry.ts"),
+      resolve(ROOT_DIRECTORY, "index.ts"),
       ...NATIVE_ASSETS,
     ],
     compile: { outfile: BINARY_PATH },

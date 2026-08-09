@@ -18,6 +18,7 @@ const GENERATE_OPTIONS = {
 export interface GeneratedAudio {
   audio: Float32Array;
   sampling_rate: number;
+  save(path: string): Promise<void>;
 }
 
 interface SpeechModel {

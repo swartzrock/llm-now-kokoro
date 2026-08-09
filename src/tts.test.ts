@@ -7,7 +7,11 @@ describe("synthesizeSpeech", () => {
     const events: string[] = [];
     let modelRequest: unknown;
     let synthesisRequest: unknown;
-    const output = { audio: new Float32Array([0.25]), sampling_rate: 24_000 };
+    const output = {
+      audio: new Float32Array([0.25]),
+      sampling_rate: 24_000,
+      save: async () => {},
+    };
 
     const result = await synthesizeSpeech("Hello", {
       homeDirectory: "/Users/alice",

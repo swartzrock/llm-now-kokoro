@@ -12,8 +12,10 @@ test.skipIf(!integrationEnabled)(
     const result = await verifyStandalone();
 
     expect(result.binaryBytes).toBeGreaterThan(0);
-    expect(JSON.parse(result.cold.stdout).samples).toBeGreaterThan(0);
-    expect(JSON.parse(result.warm.stdout).samples).toBeGreaterThan(0);
+    expect(result.cold.stdout).toBe("");
+    expect(result.cold.stderr).toContain("Loading Kokoro q8 model");
+    expect(result.warm.stdout).toBe("");
+    expect(result.warm.stderr).toContain("Loading Kokoro q8 model");
     expect(result.sidecars).toEqual([]);
     expect(result.pathAudit).toBe("verified");
   },
