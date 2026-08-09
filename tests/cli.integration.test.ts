@@ -21,9 +21,9 @@ async function runSource(arguments_: string[], home: string) {
 
 describe("source CLI argument validation", () => {
   test.each([
-    [[], 'Usage: kokoro-cli "text to speak"'],
+    [[], 'Usage: kokoro-cli [--voice <voice>] "text to speak"'],
     [["   "], "Text must contain non-whitespace characters."],
-    [["hello", "world"], 'Usage: kokoro-cli "text to speak"'],
+    [["hello", "world"], 'Usage: kokoro-cli [--voice <voice>] "text to speak"'],
   ])("fails before creating the model cache", async (arguments_, expected) => {
     const home = await mkdtemp(join(import.meta.dir, ".tmp-kokoro-cli-home-"));
 
@@ -34,6 +34,28 @@ describe("source CLI argument validation", () => {
       expect(result.stdout).toBe("");
       expect(result.stderr).toContain(expected);
       expect(result.stderr).not.toContain("    at ");
+      expect(
+        await Bun.file(
+          join(home, "Library/Caches/kokoro-cli/transformers"),
+        ).exists(),
+      ).toBe(false);
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
+  test("prints help successfully before creating the model cache", async () => {
+    const home = await mkdtemp(join(import.meta.dir, ".tmp-kokoro-cli-home-"));
+
+    try {
+      const result = await runSource(["--help"], home);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain(
+        'Usage: kokoro-cli [--voice <voice>] "text to speak"',
+      );
+      expect(result.stdout).toContain("--voice <voice>");
+      expect(result.stderr).toBe("");
       expect(
         await Bun.file(
           join(home, "Library/Caches/kokoro-cli/transformers"),

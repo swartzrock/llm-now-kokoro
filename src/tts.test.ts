@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import { synthesizeSpeech } from "./tts";
 
 describe("synthesizeSpeech", () => {
-  test("uses the fixed q8 CPU model, af_heart voice, and speed", async () => {
+  test("uses the fixed q8 CPU model, selected voice, and speed", async () => {
     const events: string[] = [];
     let modelRequest: unknown;
     let synthesisRequest: unknown;
@@ -13,7 +13,7 @@ describe("synthesizeSpeech", () => {
       save: async () => {},
     };
 
-    const result = await synthesizeSpeech("Hello", {
+    const result = await synthesizeSpeech("Hello", "af_bella", {
       homeDirectory: "/Users/alice",
       prepareCache: async () => {
         events.push("prepare-cache");
@@ -52,12 +52,48 @@ describe("synthesizeSpeech", () => {
     });
     expect(synthesisRequest).toEqual({
       text: "Hello",
-      options: { voice: "af_heart", speed: 1.0 },
+      options: { voice: "af_bella", speed: 1.0 },
     });
   });
 
+  test("only labels missing cache files as downloads", async () => {
+    const progress: string[] = [];
+
+    await synthesizeSpeech("Hello", "af_heart", {
+      homeDirectory: "/Users/alice",
+      prepareCache: async () =>
+        "/Users/alice/Library/Caches/kokoro-cli/transformers",
+      configureCache: () => {},
+      isModelFileCached: (_cachePath, _modelId, file) =>
+        file === "config.json",
+      createModel: async (_modelId, options) => {
+        options.progress_callback({
+          status: "download",
+          name: "onnx-community/Kokoro-82M-v1.0-ONNX",
+          file: "config.json",
+        });
+        options.progress_callback({
+          status: "download",
+          name: "onnx-community/Kokoro-82M-v1.0-ONNX",
+          file: "onnx/model_quantized.onnx",
+        });
+        return {
+          generate: async () => ({
+            audio: new Float32Array([0.25]),
+            sampling_rate: 24_000,
+            save: async () => {},
+          }),
+        };
+      },
+      reportProgress: (message) => progress.push(message),
+    });
+
+    expect(progress).not.toContain("Downloading config.json...");
+    expect(progress).toContain("Downloading onnx/model_quantized.onnx...");
+  });
+
   test("reports a concise model-load error that names the cache", async () => {
-    const failure = synthesizeSpeech("Hello", {
+    const failure = synthesizeSpeech("Hello", "af_heart", {
       homeDirectory: "/Users/alice",
       prepareCache: async () =>
         "/Users/alice/Library/Caches/kokoro-cli/transformers",

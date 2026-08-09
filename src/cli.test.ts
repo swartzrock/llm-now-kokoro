@@ -1,9 +1,12 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  parseTextArgument,
+  DEFAULT_VOICE,
+  HELP_TEXT,
+  parseCliArguments,
   runCli,
   runCliMain,
+  SUPPORTED_VOICES,
   type CliDependencies,
 } from "./cli";
 
@@ -35,24 +38,53 @@ function unusedDependencies(events: string[]): CliDependencies {
   };
 }
 
-describe("parseTextArgument", () => {
-  test("preserves one non-whitespace argument exactly", () => {
-    expect(parseTextArgument(["  How was your day?  "])).toBe(
-      "  How was your day?  ",
-    );
+describe("parseCliArguments", () => {
+  test("preserves one non-whitespace argument with the default voice", () => {
+    expect(parseCliArguments(["  How was your day?  "])).toEqual({
+      kind: "speak",
+      text: "  How was your day?  ",
+      voice: DEFAULT_VOICE,
+    });
+  });
+
+  test("accepts an embedded voice before or after the text", () => {
+    expect(parseCliArguments(["--voice", "af_bella", "Hello"])).toEqual({
+      kind: "speak",
+      text: "Hello",
+      voice: "af_bella",
+    });
+    expect(parseCliArguments(["Hello", "--voice", "bf_emma"])).toEqual({
+      kind: "speak",
+      text: "Hello",
+      voice: "bf_emma",
+    });
+  });
+
+  test("returns the help command", () => {
+    expect(parseCliArguments(["--help"])).toEqual({ kind: "help" });
+    expect(SUPPORTED_VOICES).toHaveLength(28);
   });
 
   test.each([
-    [[], 'Usage: kokoro-cli "text to speak"'],
+    [[], 'Usage: kokoro-cli [--voice <voice>] "text to speak"'],
     [["   \t\n"], "Text must contain non-whitespace characters."],
-    [["hello", "world"], 'Usage: kokoro-cli "text to speak"'],
+    [["hello", "world"], 'Usage: kokoro-cli [--voice <voice>] "text to speak"'],
+    [["--voice", "not_a_voice", "Hello"], "Unknown voice: not_a_voice"],
+    [["--voice", "ef_dora", "Hello"], "Unknown voice: ef_dora"],
+    [["--voice", "Hello"], "--voice requires a voice name and one text argument."],
+    [["--unknown", "Hello"], "Unknown option: --unknown"],
   ])("rejects invalid arguments", (arguments_, message) => {
-    expect(() => parseTextArgument(arguments_)).toThrow(message);
+    expect(() => parseCliArguments(arguments_)).toThrow(message);
   });
 });
 
 describe("runCli", () => {
-  test.each([[], ["   \t\n"], ["hello", "world"]])(
+  test.each([
+    [],
+    ["   \t\n"],
+    ["hello", "world"],
+    ["--voice", "not_a_voice", "Hello"],
+  ])(
     "rejects invalid arguments before any runtime dependency",
     async (...arguments_) => {
       const events: string[] = [];
@@ -63,12 +95,24 @@ describe("runCli", () => {
     },
   );
 
+  test("prints help without preparing voices, native assets, or the model", async () => {
+    const events: string[] = [];
+    const output: string[] = [];
+    const dependencies = unusedDependencies(events);
+    dependencies.writeOutput = (message) => output.push(message);
+
+    await expect(runCli(["--help"], dependencies)).resolves.toBeUndefined();
+
+    expect(output).toEqual([HELP_TEXT]);
+    expect(events).toEqual([]);
+  });
+
   test("passes the exact text through synthesis and cleans runtime state after playback", async () => {
     const events: string[] = [];
     const audio = { save: async () => {} };
     const dependencies = unusedDependencies(events);
-    dependencies.synthesize = async (text) => {
-      events.push(`synthesize:${text}`);
+    dependencies.synthesize = async (text, voice) => {
+      events.push(`synthesize:${voice}:${text}`);
       return audio;
     };
     dependencies.play = async (receivedAudio) => {
@@ -84,11 +128,24 @@ describe("runCli", () => {
       "get-environment",
       "install-voice-provider",
       "prepare-runtime",
-      "synthesize:  How was your day?  ",
+      "synthesize:af_heart:  How was your day?  ",
       "play",
       "cleanup-runtime",
       "restore-voice-provider",
     ]);
+  });
+
+  test("passes the selected embedded voice to synthesis", async () => {
+    const events: string[] = [];
+    const dependencies = unusedDependencies(events);
+    dependencies.synthesize = async (text, voice) => {
+      events.push(`synthesize:${voice}:${text}`);
+      return { save: async () => {} };
+    };
+
+    await runCli(["--voice", "bf_emma", "Hello"], dependencies);
+
+    expect(events).toContain("synthesize:bf_emma:Hello");
   });
 
   test("cleans native and voice state after synthesis fails", async () => {

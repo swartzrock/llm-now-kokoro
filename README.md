@@ -2,12 +2,12 @@
 
 `kokoro-cli` speaks one quoted text argument through the macOS default audio
 output. It uses the q8 CPU build of
-`onnx-community/Kokoro-82M-v1.0-ONNX`, voice `af_heart`, and speed `1.0`, then
-waits for `/usr/bin/afplay` to finish before exiting.
+`onnx-community/Kokoro-82M-v1.0-ONNX`, voice `af_heart` by default, and speed
+`1.0`, then waits for `/usr/bin/afplay` to finish before exiting.
 
 This version supports only Apple silicon (`arm64`) macOS on the current build
-host. It is not a universal or cross-platform binary. The interface deliberately
-has no flags, stdin mode, or output-file mode.
+host. It is not a universal or cross-platform binary. The interface supports
+only `--voice` and `--help`; it has no stdin or output-file mode.
 
 ## Run from source
 
@@ -17,10 +17,17 @@ the text as one shell argument:
 ```bash
 bun install
 bun index.ts "How was your day?"
+bun index.ts --voice af_bella "How was your day?"
+bun index.ts --help
 ```
 
 The quotes keep a multiword utterance in one argument. Missing text, whitespace-only
-text, or additional arguments fail before the model loads.
+text, an unknown voice, or additional arguments fail before the model loads.
+`--voice <voice>` may appear before or after the text. The default is `af_heart`;
+run `--help` for examples. `kokoro-js` 1.2.1 exposes 28 English voices to the
+synthesis API. The executable still embeds all 54 voice files shipped by the
+pinned package so a future library upgrade does not require changing its asset
+packaging.
 
 ## Build and run the executable
 
@@ -29,6 +36,8 @@ Build on the Apple silicon Mac where the executable will run:
 ```bash
 bun run build
 ./dist/kokoro-cli "How was your day?"
+./dist/kokoro-cli --voice bf_emma "How was your day?"
+./dist/kokoro-cli --help
 ```
 
 The build produces:
@@ -45,8 +54,8 @@ q8 model weights are downloaded and cached; they are not embedded in the binary.
 
 ## First run and model cache
 
-The first valid invocation reports model loading and downloads on stderr while
-it populates:
+The first valid invocation reports model loading and genuinely missing downloads
+on stderr while it populates:
 
 ```text
 ~/Library/Caches/kokoro-cli/transformers
@@ -58,7 +67,8 @@ on disk. Treat this as a dated estimate because upstream artifacts and filesyste
 allocation can change.
 
 Later runs reuse the complete cache instead of downloading the same artifacts,
-and a warmed cache supports offline reuse. If the cache becomes incomplete or
+and a warmed cache supports offline reuse. They still report model loading, but
+do not label cache reads as downloads. If the cache becomes incomplete or
 corrupt, quit the CLI and delete only
 `~/Library/Caches/kokoro-cli/transformers` (for example, with Finder's **Go to
 Folder**). The next invocation recreates that directory and downloads the model
@@ -86,7 +96,8 @@ Finally, run both playback paths in a normal logged-in Mac audio session:
 
 ```bash
 bun index.ts "Source playback check."
-./dist/kokoro-cli "Compiled playback check."
+bun index.ts --voice af_bella "Selected source voice check."
+./dist/kokoro-cli --voice bf_emma "Compiled playback check."
 ```
 
 The automated/focused behavior checks, q8 cold and warm synthesis, compiled

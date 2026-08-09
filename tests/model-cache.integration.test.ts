@@ -11,7 +11,7 @@ async function runSynthesis(homeDirectory: string, allowRemoteModels: boolean) {
     import { env } from "@huggingface/transformers";
     import { synthesizeSpeech } from ${JSON.stringify(ttsModulePath)};
     env.allowRemoteModels = ${allowRemoteModels};
-    const result = await synthesizeSpeech("Model cache integration check.", {
+    const result = await synthesizeSpeech("Model cache integration check.", "bf_emma", {
       homeDirectory: process.env.KOKORO_TEST_HOME,
     });
     if (result.audio.length === 0) process.exit(1);
@@ -40,6 +40,7 @@ test.skipIf(!integrationEnabled)(
       const coldRun = await runSynthesis(temporaryHome, true);
       expect(coldRun.exitCode).toBe(0);
       expect(coldRun.stderr).toContain("Loading Kokoro q8 model");
+      expect(coldRun.stderr).toContain("Downloading onnx/model_quantized.onnx");
 
       const cachePath = join(
         temporaryHome,
@@ -53,6 +54,7 @@ test.skipIf(!integrationEnabled)(
       const warmRun = await runSynthesis(temporaryHome, false);
       expect(warmRun.exitCode).toBe(0);
       expect(warmRun.stderr).toContain("Loading Kokoro q8 model");
+      expect(warmRun.stderr).not.toContain("Downloading ");
     } finally {
       await rm(temporaryHome, { recursive: true, force: true });
     }

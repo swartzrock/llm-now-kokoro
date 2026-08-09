@@ -14,8 +14,10 @@ test.skipIf(!integrationEnabled)(
     expect(result.binaryBytes).toBeGreaterThan(0);
     expect(result.cold.stdout).toBe("");
     expect(result.cold.stderr).toContain("Loading Kokoro q8 model");
+    expect(result.cold.stderr).toContain("Downloading onnx/model_quantized.onnx");
     expect(result.warm.stdout).toBe("");
     expect(result.warm.stderr).toContain("Loading Kokoro q8 model");
+    expect(result.warm.stderr).not.toContain("Downloading ");
     expect(result.sidecars).toEqual([]);
     expect(result.pathAudit).toBe("verified");
   },

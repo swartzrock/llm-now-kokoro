@@ -169,6 +169,10 @@ export const EMBEDDED_VOICE_MANIFEST = {
 } as const;
 
 export type EmbeddedVoiceName = keyof typeof EMBEDDED_VOICE_MANIFEST;
+export type SupportedVoiceName = Extract<
+  EmbeddedVoiceName,
+  `a${string}` | `b${string}`
+>;
 type VoiceProvider = (voice: string) => Promise<ArrayBuffer>;
 
 const VOICE_PROVIDER = Symbol.for("kokoro-js.voice-provider");
