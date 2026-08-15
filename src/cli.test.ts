@@ -16,16 +16,16 @@ function unusedDependencies(events: string[]): CliDependencies {
       events.push("install-voice-provider");
       return () => events.push("restore-voice-provider");
     },
-    prepareRuntime: async () => {
-      events.push("prepare-runtime");
+    prepareRuntime: async (backend) => {
+      events.push(`prepare-runtime:${backend}`);
       return {
         cleanup: async () => {
           events.push("cleanup-runtime");
         },
       };
     },
-    synthesize: async () => {
-      events.push("synthesize");
+    synthesize: async (_text, _voice, backend) => {
+      events.push(`synthesize:${backend}`);
       return { save: async () => {} };
     },
     play: async () => {
@@ -44,6 +44,7 @@ describe("parseCliArguments", () => {
       kind: "speak",
       text: "  How was your day?  ",
       voice: DEFAULT_VOICE,
+      backend: "native",
     });
   });
 
@@ -52,11 +53,13 @@ describe("parseCliArguments", () => {
       kind: "speak",
       text: "Hello",
       voice: "af_bella",
+      backend: "native",
     });
     expect(parseCliArguments(["Hello", "--voice", "bf_emma"])).toEqual({
       kind: "speak",
       text: "Hello",
       voice: "bf_emma",
+      backend: "native",
     });
     for (const voice of [
       "ef_dora",
@@ -68,8 +71,24 @@ describe("parseCliArguments", () => {
         kind: "speak",
         text: "Hello",
         voice,
+        backend: "native",
       });
     }
+  });
+
+  test("accepts --wasm before or after the text", () => {
+    expect(parseCliArguments(["--wasm", "Hello"])).toEqual({
+      kind: "speak",
+      text: "Hello",
+      voice: DEFAULT_VOICE,
+      backend: "wasm",
+    });
+    expect(parseCliArguments(["Hello", "--wasm"])).toEqual({
+      kind: "speak",
+      text: "Hello",
+      voice: DEFAULT_VOICE,
+      backend: "wasm",
+    });
   });
 
   test("returns the help command", () => {
@@ -78,11 +97,12 @@ describe("parseCliArguments", () => {
   });
 
   test.each([
-    [[], 'Usage: kokoro-cli [--voice <voice>] "text to speak"'],
+    [[], 'Usage: kokoro-cli [--voice <voice>] [--wasm] "text to speak"'],
     [["   \t\n"], "Text must contain non-whitespace characters."],
-    [["hello", "world"], 'Usage: kokoro-cli [--voice <voice>] "text to speak"'],
+    [["hello", "world"], 'Usage: kokoro-cli [--voice <voice>] [--wasm] "text to speak"'],
     [["--voice", "not_a_voice", "Hello"], "Unknown voice: not_a_voice"],
     [["--voice", "Hello"], "--voice requires a voice name and one text argument."],
+    [["--wasm", "--wasm", "Hello"], "--wasm may only be specified once."],
     [["--unknown", "Hello"], "Unknown option: --unknown"],
   ])("rejects invalid arguments", (arguments_, message) => {
     expect(() => parseCliArguments(arguments_)).toThrow(message);
@@ -122,8 +142,8 @@ describe("runCli", () => {
     const events: string[] = [];
     const audio = { save: async () => {} };
     const dependencies = unusedDependencies(events);
-    dependencies.synthesize = async (text, voice) => {
-      events.push(`synthesize:${voice}:${text}`);
+    dependencies.synthesize = async (text, voice, backend) => {
+      events.push(`synthesize:${backend}:${voice}:${text}`);
       return audio;
     };
     dependencies.play = async (receivedAudio) => {
@@ -138,8 +158,8 @@ describe("runCli", () => {
     expect(events).toEqual([
       "get-environment",
       "install-voice-provider",
-      "prepare-runtime",
-      "synthesize:af_heart:  How was your day?  ",
+      "prepare-runtime:native",
+      "synthesize:native:af_heart:  How was your day?  ",
       "play",
       "cleanup-runtime",
       "restore-voice-provider",
@@ -149,14 +169,24 @@ describe("runCli", () => {
   test("passes the selected embedded voice to synthesis", async () => {
     const events: string[] = [];
     const dependencies = unusedDependencies(events);
-    dependencies.synthesize = async (text, voice) => {
-      events.push(`synthesize:${voice}:${text}`);
+    dependencies.synthesize = async (text, voice, backend) => {
+      events.push(`synthesize:${backend}:${voice}:${text}`);
       return { save: async () => {} };
     };
 
     await runCli(["--voice", "jf_alpha", "Hello"], dependencies);
 
-    expect(events).toContain("synthesize:jf_alpha:Hello");
+    expect(events).toContain("synthesize:native:jf_alpha:Hello");
+  });
+
+  test("passes the WASM backend through runtime preparation and synthesis", async () => {
+    const events: string[] = [];
+    const dependencies = unusedDependencies(events);
+
+    await runCli(["--wasm", "Hello"], dependencies);
+
+    expect(events).toContain("prepare-runtime:wasm");
+    expect(events).toContain("synthesize:wasm");
   });
 
   test("cleans native and voice state after synthesis fails", async () => {
@@ -174,11 +204,39 @@ describe("runCli", () => {
     expect(events).toEqual([
       "get-environment",
       "install-voice-provider",
-      "prepare-runtime",
+      "prepare-runtime:native",
       "synthesize",
       "cleanup-runtime",
       "restore-voice-provider",
     ]);
+  });
+
+  test("preserves synthesis and runtime cleanup failures", async () => {
+    const events: string[] = [];
+    const dependencies = unusedDependencies(events);
+    dependencies.synthesize = async () => {
+      throw new Error("inference failed");
+    };
+    dependencies.prepareRuntime = async () => ({
+      cleanup: async () => {
+        events.push("cleanup-runtime");
+        throw new Error("runtime cleanup failed");
+      },
+    });
+
+    let error: unknown;
+    try {
+      await runCli(["Hello"], dependencies);
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toEqual([
+      new Error("inference failed"),
+      new Error("runtime cleanup failed"),
+    ]);
+    expect(events.at(-1)).toBe("restore-voice-provider");
   });
 
   test("uses an environment-only embedded voice self-check without loading the model", async () => {

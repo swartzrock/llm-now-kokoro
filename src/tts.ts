@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { env, type ProgressCallback, type ProgressInfo } from "@huggingface/transformers";
 import { KokoroTTS } from "kokoro-js";
 
+import type { InferenceBackend } from "./backend";
 import { prepareModelCache } from "./cache";
 import {
   EMBEDDED_VOICE_MANIFEST,
@@ -13,10 +14,7 @@ import { errorMessage } from "./error-message";
 
 const MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
 
-const MODEL_OPTIONS = {
-  dtype: "q8",
-  device: "cpu",
-} as const;
+const MODEL_DTYPE = "q8" as const;
 
 interface GenerateOptions {
   voice: SupportedVoiceName;
@@ -34,8 +32,8 @@ interface SpeechModel {
 }
 
 interface ModelOptions {
-  dtype: typeof MODEL_OPTIONS.dtype;
-  device: typeof MODEL_OPTIONS.device;
+  dtype: typeof MODEL_DTYPE;
+  device: "cpu" | "wasm";
   progress_callback: ProgressCallback;
 }
 
@@ -55,6 +53,7 @@ export interface SynthesisDependencies {
 export async function synthesizeSpeech(
   text: string,
   voice: SupportedVoiceName,
+  backend: InferenceBackend = "native",
   dependencies: SynthesisDependencies = {},
 ): Promise<GeneratedAudio> {
   const prepareCache = dependencies.prepareCache ?? prepareModelCache;
@@ -71,7 +70,8 @@ export async function synthesizeSpeech(
   let model: SpeechModel;
   try {
     model = await createModel(MODEL_ID, {
-      ...MODEL_OPTIONS,
+      dtype: MODEL_DTYPE,
+      device: backend === "native" ? "cpu" : "wasm",
       progress_callback: createProgressCallback(
         cachePath,
         isModelFileCached,

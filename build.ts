@@ -7,6 +7,7 @@ import {
   type EmbeddedVoiceName,
 } from "./src/embedded-voices";
 import { ADDON_NAME, DYLIB_NAME } from "./src/native-runtime";
+import { WASM_ASSET_NAMES } from "./src/wasm-runtime";
 
 const REQUIRED_BUN_VERSION = "1.3.14";
 
@@ -23,6 +24,10 @@ const NATIVE_DIRECTORY = resolve(
 );
 const NATIVE_ASSETS = [ADDON_NAME, DYLIB_NAME].map((name) =>
   resolve(NATIVE_DIRECTORY, name),
+);
+const WASM_DIRECTORY = resolve(ROOT_DIRECTORY, "node_modules/onnxruntime-web/dist");
+const WASM_ASSETS = WASM_ASSET_NAMES.map((name) =>
+  resolve(WASM_DIRECTORY, name),
 );
 
 export function assertBunVersion(actualVersion = Bun.version): void {
@@ -67,9 +72,9 @@ export async function buildStandalone(): Promise<void> {
     throw new Error(`Standalone builds are supported only on the current macOS host`);
   }
   await verifyPinnedVoicePackage();
-  for (const asset of NATIVE_ASSETS) {
+  for (const asset of [...NATIVE_ASSETS, ...WASM_ASSETS]) {
     if (!(await Bun.file(asset).exists())) {
-      throw new Error(`Pinned host native runtime asset not found: ${asset}`);
+      throw new Error(`Pinned runtime asset not found: ${asset}`);
     }
   }
   await mkdir(DIST_DIRECTORY, { recursive: true });
@@ -80,7 +85,7 @@ export async function buildStandalone(): Promise<void> {
       ...NATIVE_ASSETS,
     ],
     compile: { outfile: BINARY_PATH },
-    loader: { ".node": "file", ".dylib": "file" },
+    loader: { ".node": "file", ".dylib": "file", ".wasm": "file" },
     minify: true,
     naming: { asset: "[name].[ext]" },
     plugins: [

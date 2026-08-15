@@ -13,7 +13,7 @@ describe("synthesizeSpeech", () => {
       save: async () => {},
     };
 
-    const result = await synthesizeSpeech("Hello", "af_bella", {
+    const result = await synthesizeSpeech("Hello", "af_bella", "native", {
       homeDirectory: "/Users/alice",
       prepareCache: async () => {
         events.push("prepare-cache");
@@ -56,10 +56,41 @@ describe("synthesizeSpeech", () => {
     });
   });
 
+  test("requests the installed WASM execution provider", async () => {
+    let modelRequest: unknown;
+
+    await synthesizeSpeech("Hello", "af_heart", "wasm", {
+      homeDirectory: "/Users/alice",
+      prepareCache: async () =>
+        "/Users/alice/Library/Caches/kokoro-cli/transformers",
+      configureCache: () => {},
+      createModel: async (modelId, options) => {
+        modelRequest = { modelId, options };
+        return {
+          generate: async () => ({
+            audio: new Float32Array([0.25]),
+            sampling_rate: 24_000,
+            save: async () => {},
+          }),
+        };
+      },
+      reportProgress: () => {},
+    });
+
+    expect(modelRequest).toEqual({
+      modelId: "onnx-community/Kokoro-82M-v1.0-ONNX",
+      options: {
+        dtype: "q8",
+        device: "wasm",
+        progress_callback: expect.any(Function),
+      },
+    });
+  });
+
   test("only labels missing cache files as downloads", async () => {
     const progress: string[] = [];
 
-    await synthesizeSpeech("Hello", "af_heart", {
+    await synthesizeSpeech("Hello", "af_heart", "native", {
       homeDirectory: "/Users/alice",
       prepareCache: async () =>
         "/Users/alice/Library/Caches/kokoro-cli/transformers",
@@ -93,7 +124,7 @@ describe("synthesizeSpeech", () => {
   });
 
   test("reports a concise model-load error that names the cache", async () => {
-    const failure = synthesizeSpeech("Hello", "af_heart", {
+    const failure = synthesizeSpeech("Hello", "af_heart", "native", {
       homeDirectory: "/Users/alice",
       prepareCache: async () =>
         "/Users/alice/Library/Caches/kokoro-cli/transformers",

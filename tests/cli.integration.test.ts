@@ -21,9 +21,9 @@ async function runSource(arguments_: string[], home: string) {
 
 describe("source CLI argument validation", () => {
   test.each([
-    [[], 'Usage: kokoro-cli [--voice <voice>] "text to speak"'],
+    [[], 'Usage: kokoro-cli [--voice <voice>] [--wasm] "text to speak"'],
     [["   "], "Text must contain non-whitespace characters."],
-    [["hello", "world"], 'Usage: kokoro-cli [--voice <voice>] "text to speak"'],
+    [["hello", "world"], 'Usage: kokoro-cli [--voice <voice>] [--wasm] "text to speak"'],
   ])("fails before creating the model cache", async (arguments_, expected) => {
     const home = await mkdtemp(join(import.meta.dir, ".tmp-kokoro-cli-home-"));
 
@@ -52,9 +52,10 @@ describe("source CLI argument validation", () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain(
-        'Usage: kokoro-cli [--voice <voice>] "text to speak"',
+        'Usage: kokoro-cli [--voice <voice>] [--wasm] "text to speak"',
       );
       expect(result.stdout).toContain("--voice <voice>");
+      expect(result.stdout).toContain("--wasm");
       expect(result.stdout).toContain("ff_siwis");
       expect(result.stdout).toContain("54 embedded voices");
       expect(result.stderr).toBe("");

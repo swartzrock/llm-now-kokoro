@@ -16,6 +16,7 @@ export interface StandaloneVerificationResult {
   binaryBytes: number;
   cold: CommandResult;
   warm: CommandResult;
+  wasm: CommandResult;
   sidecars: string[];
   pathAudit: "verified" | "unavailable";
 }
@@ -91,13 +92,26 @@ export async function verifyStandalone(
     );
     assertCompletedSpeech("warm offline", warm);
 
+    const wasm = await run(
+      copiedBinary,
+      ["--wasm", ...multilingualVoiceArguments, "Standalone WASM playback check."],
+      room,
+      {
+        ...baseEnvironment,
+        KOKORO_OFFLINE: "1",
+        DYLD_PRINT_LIBRARIES: "1",
+      },
+    );
+    assertCompletedSpeech("WASM offline", wasm);
+    assertWasmDidNotLoadNativeRuntime(wasm.stderr);
+
     const sidecars = [
       ...(await findSidecars(room)),
       ...(await findSidecars(runtimeTemp)),
     ];
     if (sidecars.length > 0) {
       throw new Error(
-        `Standalone left persistent native or voice sidecars: ${sidecars.join(", ")}`,
+        `Standalone left persistent runtime or voice sidecars: ${sidecars.join(", ")}`,
       );
     }
 
@@ -105,6 +119,7 @@ export async function verifyStandalone(
       binaryBytes: binaryFile.size,
       cold,
       warm,
+      wasm,
       sidecars,
       pathAudit,
     };
@@ -195,13 +210,21 @@ function auditLoadedPaths(
   return "verified";
 }
 
+function assertWasmDidNotLoadNativeRuntime(stderr: string): void {
+  for (const name of [ADDON_NAME, DYLIB_NAME]) {
+    if (stderr.includes(name)) {
+      throw new Error(`Standalone WASM path unexpectedly loaded native ${name}`);
+    }
+  }
+}
+
 async function findSidecars(directory: string): Promise<string[]> {
   const sidecars: string[] = [];
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     const path = join(directory, entry.name);
     if (entry.isDirectory()) {
       sidecars.push(...(await findSidecars(path)));
-    } else if (/\.(?:bin|dylib|node|wav)$/.test(entry.name)) {
+    } else if (/\.(?:bin|dylib|mjs|node|wasm|wav)$/.test(entry.name)) {
       sidecars.push(path);
     }
   }
@@ -217,6 +240,7 @@ if (import.meta.main) {
         binaryBytes: result.binaryBytes,
         coldMs: result.cold.elapsedMs,
         warmMs: result.warm.elapsedMs,
+        wasmMs: result.wasm.elapsedMs,
         sidecars: result.sidecars,
         pathAudit: result.pathAudit,
       },

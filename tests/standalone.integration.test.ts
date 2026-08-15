@@ -18,6 +18,9 @@ test.skipIf(!integrationEnabled)(
     expect(result.warm.stdout).toBe("");
     expect(result.warm.stderr).toContain("Loading Kokoro q8 model");
     expect(result.warm.stderr).not.toContain("Downloading ");
+    expect(result.wasm.stdout).toBe("");
+    expect(result.wasm.stderr).toContain("Loading Kokoro q8 model");
+    expect(result.wasm.stderr).not.toContain("Downloading ");
     expect(result.sidecars).toEqual([]);
     expect(result.pathAudit).toBe("verified");
   },

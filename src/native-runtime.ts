@@ -2,6 +2,8 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+import type { PreparedRuntime } from "./backend";
+
 export const ADDON_NAME = "onnxruntime_binding.node";
 export const DYLIB_NAME = "libonnxruntime.1.21.0.dylib";
 const BINDING_PATH_VARIABLE = "KOKORO_ONNX_BINDING_PATH";
@@ -17,13 +19,9 @@ export interface NativeRuntimeDependencies {
   setBindingPath?: (path: string | undefined) => void;
 }
 
-export interface PreparedNativeRuntime {
-  cleanup: () => Promise<void>;
-}
-
 export async function prepareNativeRuntime(
   dependencies: NativeRuntimeDependencies = {},
-): Promise<PreparedNativeRuntime> {
+): Promise<PreparedRuntime> {
   const makeTempDirectory =
     dependencies.makeTempDirectory ??
     (() => mkdtemp(join(tmpdir(), "kokoro-cli-onnx-")));

@@ -3,11 +3,12 @@
 `kokoro-cli` speaks one quoted text argument through the macOS default audio
 output. It uses the q8 CPU build of
 `onnx-community/Kokoro-82M-v1.0-ONNX`, voice `af_heart` by default, and speed
-`1.0`, then waits for `/usr/bin/afplay` to finish before exiting.
+`1.0`. It uses `onnxruntime-node` by default, then waits for `/usr/bin/afplay`
+to finish before exiting.
 
 This version supports only Apple silicon (`arm64`) macOS on the current build
 host. It is not a universal or cross-platform binary. The interface supports
-only `--voice` and `--help`; it has no stdin or output-file mode.
+only `--voice`, `--wasm`, and `--help`; it has no stdin or output-file mode.
 
 ## Run from source
 
@@ -20,6 +21,7 @@ bun index.ts "How was your day?"
 bun index.ts --voice af_bella "How was your day?"
 bun index.ts --voice ff_siwis "I am Siwis. Listen carefully."
 bun index.ts --voice jf_alpha "I am Alpha. Listen carefully."
+bun index.ts --wasm "Run this with WebAssembly."
 bun index.ts --help
 ```
 
@@ -31,6 +33,10 @@ accepted and embedded. Every voice uses English phonemization: `b*` voices use
 British English and the others use American English. Pronunciation and timbre
 quality may vary for voices designed for other languages.
 
+Pass `--wasm` before or after the text to use `onnxruntime-web`'s WebAssembly
+backend instead of the default native runtime. Source and compiled invocations
+use the same model cache and voices.
+
 ## Build and run the executable
 
 Build on the Apple silicon Mac where the executable will run:
@@ -41,20 +47,21 @@ bun run build
 ./dist/kokoro-cli --voice bf_emma "How was your day?"
 ./dist/kokoro-cli --voice ff_siwis "Listen carefully."
 ./dist/kokoro-cli --voice jf_alpha "Listen carefully."
+./dist/kokoro-cli --wasm "Run this with WebAssembly."
 ./dist/kokoro-cli --help
 ```
 
 The build produces:
 
-- `dist/kokoro-cli`: the standalone current-host executable. The verified build
-  is 126,092,642 bytes (about 120 MiB).
+- `dist/kokoro-cli`: the standalone current-host executable.
 - `dist/embedded-voices.manifest.json`: a build-audit manifest; the executable
   does not need this file at runtime.
 
 The executable embeds the CLI and Kokoro code, all 54 voice `.bin` files from
-the pinned `kokoro-js` package, and the Apple silicon ONNX host native runtime.
-It runs without Bun, project `node_modules`, or persistent native sidecars. The
-q8 model weights are downloaded and cached; they are not embedded in the binary.
+the pinned `kokoro-js` package, the Apple silicon ONNX host native runtime, and
+the ONNX WebAssembly runtime. It runs without Bun, project `node_modules`, a
+separate ONNX Runtime installation, or persistent runtime sidecars. The q8 model
+weights are downloaded and cached; they are not embedded in the binary.
 
 ## First run and model cache
 
@@ -93,8 +100,8 @@ bun run smoke:standalone
 `bun run test` is the default offline suite. `smoke:model-cache` is the opt-in
 network check for cold q8 download and warm offline reuse. After a build,
 `smoke:standalone` checks the executable in a clean temporary directory, including
-embedded voices, cold and warm inference, native-library paths, playback, and
-the absence of persistent sidecars.
+embedded voices, cold and warm native inference, warm WebAssembly inference,
+native-library paths, playback, and the absence of persistent sidecars.
 
 Finally, run both playback paths in a normal logged-in Mac audio session:
 

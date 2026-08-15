@@ -4,9 +4,11 @@ import {
   type SupportedVoiceName,
   verifyEmbeddedVoices,
 } from "./embedded-voices";
+import type { InferenceBackend, PreparedRuntime } from "./backend";
 import { errorMessage } from "./error-message";
 import { ADDON_NAME, prepareNativeRuntime } from "./native-runtime";
 import { playAudio, type SavableAudio } from "./playback";
+import { prepareWasmRuntime } from "./wasm-runtime";
 
 const VOICE_SELF_CHECK_VARIABLE = "KOKORO_STANDALONE_VOICE_SELF_CHECK";
 
@@ -14,21 +16,18 @@ export const DEFAULT_VOICE: SupportedVoiceName = "af_heart";
 export const SUPPORTED_VOICES = Object.freeze(
   Object.keys(EMBEDDED_VOICE_MANIFEST) as SupportedVoiceName[],
 );
-const USAGE = 'Usage: kokoro-cli [--voice <voice>] "text to speak"';
+const USAGE = 'Usage: kokoro-cli [--voice <voice>] [--wasm] "text to speak"';
 export const HELP_TEXT = `${USAGE}
 
 Speak text with the Kokoro q8 model.
 
 Options:
   --voice <voice>  Select an embedded voice (default: ${DEFAULT_VOICE})
+  --wasm           Use WebAssembly instead of the native ONNX runtime
   --help           Show this help
 
 Voice examples: af_heart, bf_emma, ef_dora, ff_siwis, jf_alpha, zf_xiaobei
 All ${SUPPORTED_VOICES.length} embedded voices use English pronunciation.`;
-
-interface PreparedRuntime {
-  cleanup(): Promise<void>;
-}
 
 interface VoiceSelfCheckResult {
   status: "ok";
@@ -39,10 +38,11 @@ interface VoiceSelfCheckResult {
 export interface CliDependencies {
   installVoiceProvider?: () => () => void;
   verifyVoices?: () => Promise<string[]>;
-  prepareRuntime?: () => Promise<PreparedRuntime>;
+  prepareRuntime?: (backend: InferenceBackend) => Promise<PreparedRuntime>;
   synthesize?: (
     text: string,
     voice: SupportedVoiceName,
+    backend: InferenceBackend,
   ) => Promise<SavableAudio>;
   play?: (audio: SavableAudio) => Promise<void>;
   getEnvironment?: (name: string) => string | undefined;
@@ -53,7 +53,12 @@ export interface CliDependencies {
 
 export type CliCommand =
   | { kind: "help" }
-  | { kind: "speak"; text: string; voice: SupportedVoiceName };
+  | {
+      kind: "speak";
+      text: string;
+      voice: SupportedVoiceName;
+      backend: InferenceBackend;
+    };
 
 export function parseCliArguments(arguments_: string[]): CliCommand {
   if (arguments_.length === 1 && arguments_[0] === "--help") {
@@ -63,6 +68,7 @@ export function parseCliArguments(arguments_: string[]): CliCommand {
   let text: string | undefined;
   let voice: string = DEFAULT_VOICE;
   let hasVoiceOption = false;
+  let useWasm = false;
 
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index];
@@ -80,6 +86,14 @@ export function parseCliArguments(arguments_: string[]): CliCommand {
       voice = value;
       hasVoiceOption = true;
       index += 1;
+      continue;
+    }
+
+    if (argument === "--wasm") {
+      if (useWasm) {
+        throw new Error("--wasm may only be specified once.");
+      }
+      useWasm = true;
       continue;
     }
 
@@ -105,7 +119,12 @@ export function parseCliArguments(arguments_: string[]): CliCommand {
     throw new Error(`Unknown voice: ${voice}. Run --help for usage.`);
   }
 
-  return { kind: "speak", text, voice };
+  return {
+    kind: "speak",
+    text,
+    voice,
+    backend: useWasm ? "wasm" : "native",
+  };
 }
 
 function isSupportedVoice(voice: string): voice is SupportedVoiceName {
@@ -122,17 +141,16 @@ export async function runCli(
     return;
   }
 
-  const { text, voice } = command;
+  const { text, voice, backend } = command;
   const getEnvironment =
     dependencies.getEnvironment ?? ((name: string) => process.env[name]);
   const selfCheck = getEnvironment(VOICE_SELF_CHECK_VARIABLE) === "1";
   const installVoiceProvider =
     dependencies.installVoiceProvider ?? installEmbeddedVoiceProvider;
   const restoreVoiceProvider = installVoiceProvider();
-  let runtime: PreparedRuntime | undefined;
 
-  try {
-    if (selfCheck) {
+  if (selfCheck) {
+    try {
       const voices = await (dependencies.verifyVoices ?? verifyEmbeddedVoices)();
       const result: VoiceSelfCheckResult = {
         status: "ok",
@@ -140,18 +158,58 @@ export async function runCli(
         hasAfHeart: voices.includes("af_heart"),
       };
       (dependencies.writeSelfCheck ?? writeSelfCheck)(result);
-      return;
-    }
-
-    runtime = await (dependencies.prepareRuntime ?? prepareInferenceRuntime)();
-    const audio = await (dependencies.synthesize ?? synthesize)(text, voice);
-    await (dependencies.play ?? playAudio)(audio);
-  } finally {
-    try {
-      await runtime?.cleanup();
     } finally {
       restoreVoiceProvider();
     }
+    return;
+  }
+
+  let runtime: PreparedRuntime | undefined;
+  let operationFailed = false;
+  let operationError: unknown;
+
+  try {
+    runtime = await (dependencies.prepareRuntime ?? prepareInferenceRuntime)(
+      backend,
+    );
+    const audio = await (dependencies.synthesize ?? synthesize)(
+      text,
+      voice,
+      backend,
+    );
+    await (dependencies.play ?? playAudio)(audio);
+  } catch (error) {
+    operationFailed = true;
+    operationError = error;
+  }
+
+  const cleanupErrors: unknown[] = [];
+  try {
+    await runtime?.cleanup();
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+  try {
+    restoreVoiceProvider();
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
+
+  if (operationFailed) {
+    if (cleanupErrors.length > 0) {
+      const errors = [operationError, ...cleanupErrors];
+      throw new AggregateError(
+        errors,
+        errors.map(errorMessage).join("; "),
+      );
+    }
+    throw operationError;
+  }
+  if (cleanupErrors.length === 1) {
+    throw cleanupErrors[0];
+  }
+  if (cleanupErrors.length > 1) {
+    throw new AggregateError(cleanupErrors, "Unable to clean CLI resources");
   }
 }
 
@@ -169,21 +227,29 @@ export async function runCliMain(
   }
 }
 
-async function prepareInferenceRuntime(): Promise<PreparedRuntime> {
+async function prepareInferenceRuntime(
+  backend: InferenceBackend,
+): Promise<PreparedRuntime> {
   const hasEmbeddedNativeRuntime = Bun.embeddedFiles.some(
     (file) => (file as Blob & { name: string }).name === ADDON_NAME,
   );
 
-  if (!hasEmbeddedNativeRuntime) {
-    return { cleanup: async () => {} };
+  if (backend === "wasm") {
+    return prepareWasmRuntime();
+  }
+  if (hasEmbeddedNativeRuntime) {
+    return prepareNativeRuntime();
   }
 
-  return prepareNativeRuntime();
+  return {
+    cleanup: async () => {},
+  };
 }
 
 async function synthesize(
   text: string,
   voice: SupportedVoiceName,
+  backend: InferenceBackend,
 ): Promise<SavableAudio> {
   if (process.env.KOKORO_OFFLINE === "1") {
     const { env } = await import("@huggingface/transformers");
@@ -191,7 +257,7 @@ async function synthesize(
   }
 
   const { synthesizeSpeech } = await import("./tts");
-  return synthesizeSpeech(text, voice);
+  return synthesizeSpeech(text, voice, backend);
 }
 
 function writeSelfCheck(result: VoiceSelfCheckResult): void {

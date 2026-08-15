@@ -15,13 +15,19 @@
   },
   "dependencies": {
     "@huggingface/transformers": "3.5.1",
-    "kokoro-js": "1.2.1"
+    "kokoro-js": "1.2.1",
+    "onnxruntime-node": "1.21.0",
+    "onnxruntime-web": "1.21.0"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",
     "typescript": "5.9.3"
   },
+  "overrides": {
+    "onnxruntime-web": "1.21.0"
+  },
   "patchedDependencies": {
+    "@huggingface/transformers@3.5.1": "patches/@huggingface%2ftransformers@3.5.1.patch",
     "kokoro-js@1.2.1": "patches/kokoro-js@1.2.1.patch",
     "onnxruntime-node@1.21.0": "patches/onnxruntime-node@1.21.0.patch"
   }
