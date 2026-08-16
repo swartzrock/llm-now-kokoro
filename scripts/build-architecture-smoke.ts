@@ -26,7 +26,7 @@ export const ARCHITECTURE_DIST_ROOT = resolve(
 );
 export const ARCHITECTURE_INSTALL_ROOT = resolve(
   ARCHITECTURE_DIST_ROOT,
-  "installed pack ユニコード",
+  "installed pack Unicode ✓",
 );
 export const ARCHITECTURE_RUNTIME_ROOT = resolve(
   ARCHITECTURE_INSTALL_ROOT,

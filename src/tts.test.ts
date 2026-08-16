@@ -84,7 +84,7 @@ function mockDependencies(options: {
 describe("native local-only speech engine", () => {
   test("loads verified files and sidecars before importing a fixed q8 CPU model", async () => {
     const { dependencies, environment, events } = mockDependencies();
-    const packRoot = resolve("/packs/with spaces/ユニコード");
+    const packRoot = resolve("/packs/with spaces/Unicode ✓");
     const engine = await createNativeSpeechEngine(
       packRoot,
       dependencies,
