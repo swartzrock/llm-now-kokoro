@@ -18,11 +18,11 @@ describe("native dependency inspection parsers", () => {
   });
 
   test("separates resolved and missing ELF dependencies", () => {
-    const output = `\tlibonnxruntime.so.1 => /pack/runtime/onnx/libonnxruntime.so.1 (0x1)\n\t/lib64/ld-linux-x86-64.so.2 (0x2)\n\tlibmissing.so => not found\n`;
+    const output = `\tlibonnxruntime.so.1 => /installed pack ユニコード/runtime/onnx/libonnxruntime.so.1 (0x1)\n\t/lib64/ld-linux-x86-64.so.2 (0x2)\n\tlibmissing.so => not found\n`;
     expect(parseLddResolved(output)).toEqual([
       {
         name: "libonnxruntime.so.1",
-        path: "/pack/runtime/onnx/libonnxruntime.so.1",
+        path: "/installed pack ユニコード/runtime/onnx/libonnxruntime.so.1",
       },
       {
         name: "ld-linux-x86-64.so.2",

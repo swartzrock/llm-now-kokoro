@@ -364,12 +364,12 @@ export function parseLddMissing(output: string): string[] {
 export function parseLddResolved(output: string): Array<{ name: string; path: string }> {
   const dependencies: Array<{ name: string; path: string }> = [];
   for (const line of output.split(/\r?\n/)) {
-    const match = /^\s*(\S+)\s+=>\s+(\/\S+)/.exec(line);
+    const match = /^\s*(\S+)\s+=>\s+(\/.+?)\s+\([^)]*\)\s*$/.exec(line);
     if (match) {
       dependencies.push({ name: match[1]!, path: match[2]! });
       continue;
     }
-    const direct = /^\s*(\/\S+)\s+\(/.exec(line);
+    const direct = /^\s*(\/.+?)\s+\([^)]*\)\s*$/.exec(line);
     if (direct) {
       dependencies.push({ name: basename(direct[1]!), path: direct[1]! });
     }
