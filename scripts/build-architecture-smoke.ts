@@ -2,6 +2,7 @@ import { chmod, cp, mkdir, readdir, rm } from "node:fs/promises";
 import { basename, relative, resolve } from "node:path";
 
 import {
+  resolveBunCompileTarget,
   resolveRuntimeTarget,
   SUPPORTED_RUNTIME_TARGETS,
 } from "../src/backend";
@@ -77,6 +78,7 @@ export async function buildArchitectureSmoke(): Promise<void> {
   const result = await Bun.build({
     entrypoints: [resolve(import.meta.dir, "../index.ts")],
     compile: {
+      target: resolveBunCompileTarget(),
       outfile: ARCHITECTURE_HELPER_PATH,
       autoloadBunfig: false,
       autoloadDotenv: false,

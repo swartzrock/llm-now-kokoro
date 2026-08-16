@@ -2,6 +2,7 @@ import { chmod, mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import { omitUnusedSharpPlugin } from "./scripts/build-plugins";
+import { resolveBunCompileTarget } from "./src/backend";
 import { verifyPinnedPhonemizerBundle } from "./src/model-assets";
 
 const REQUIRED_BUN_VERSION = "1.3.14";
@@ -29,6 +30,7 @@ export async function buildStandalone(): Promise<string> {
   const result = await Bun.build({
     entrypoints: [resolve(ROOT_DIRECTORY, "index.ts")],
     compile: {
+      target: resolveBunCompileTarget(),
       outfile: BINARY_PATH,
       autoloadBunfig: false,
       autoloadDotenv: false,
@@ -42,7 +44,6 @@ export async function buildStandalone(): Promise<string> {
         "Sharp is unavailable in the TTS-only executable",
       ),
     ],
-    target: "bun",
   });
   if (!result.success) {
     throw new AggregateError(result.logs, "Standalone compilation failed");

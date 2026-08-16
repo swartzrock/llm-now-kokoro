@@ -37,11 +37,35 @@ const TARGETS: Readonly<Record<SupportedRuntimeTarget, NativeRuntimeTarget>> = {
   },
 };
 
+const BUN_COMPILE_TARGETS: Readonly<
+  Record<SupportedRuntimeTarget, Bun.Build.CompileTarget>
+> = {
+  "darwin-x64": "bun-darwin-x64-baseline",
+  "darwin-arm64": "bun-darwin-arm64",
+  "linux-x64": "bun-linux-x64-baseline",
+  "linux-arm64": "bun-linux-arm64",
+  "win32-x64": "bun-windows-x64-baseline",
+};
+
 export function resolveRuntimeTarget(
   platform = process.platform,
   architecture = process.arch,
 ): NativeRuntimeTarget {
   const target = TARGETS[`${platform}-${architecture}` as SupportedRuntimeTarget];
+  if (!target) {
+    throw new Error("unsupported-runtime-target");
+  }
+  return target;
+}
+
+export function resolveBunCompileTarget(
+  platform = process.platform,
+  architecture = process.arch,
+): Bun.Build.CompileTarget {
+  const target =
+    BUN_COMPILE_TARGETS[
+      `${platform}-${architecture}` as SupportedRuntimeTarget
+    ];
   if (!target) {
     throw new Error("unsupported-runtime-target");
   }
