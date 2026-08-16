@@ -55,6 +55,25 @@ export async function buildArchitectureSmoke(): Promise<void> {
     entrypoints: [resolve(import.meta.dir, "architecture-smoke.ts")],
     compile: { outfile: ARCHITECTURE_HELPER_PATH },
     minify: true,
+    plugins: [
+      {
+        name: "omit-unused-sharp",
+        setup(builder) {
+          builder.onResolve({ filter: /^sharp$/ }, () => ({
+            path: "sharp",
+            namespace: "architecture-smoke-sharp",
+          }));
+          builder.onLoad(
+            { filter: /.*/, namespace: "architecture-smoke-sharp" },
+            () => ({
+              contents:
+                'export default function sharp() { throw new Error("Sharp is unavailable in the TTS helper"); }',
+              loader: "js",
+            }),
+          );
+        },
+      },
+    ],
   });
   if (!result.success) {
     throw new AggregateError(result.logs, "Unable to compile architecture helper");
