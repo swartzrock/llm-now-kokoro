@@ -63,7 +63,6 @@ export async function buildArchitectureSmoke(): Promise<void> {
   if (!compiledHelper || result.outputs.length !== 1) {
     throw new Error(`Expected one compiled helper; found ${result.outputs.length}`);
   }
-  await Bun.write(ARCHITECTURE_HELPER_PATH, compiledHelper);
   if (process.platform !== "win32") {
     await chmod(ARCHITECTURE_HELPER_PATH, 0o755);
   }
