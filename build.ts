@@ -1,6 +1,7 @@
 import { chmod, mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 
+import { omitUnusedSharpPlugin } from "./scripts/build-plugins";
 import { verifyPinnedPhonemizerBundle } from "./src/model-assets";
 
 const REQUIRED_BUN_VERSION = "1.3.14";
@@ -36,23 +37,10 @@ export async function buildStandalone(): Promise<string> {
     },
     minify: true,
     plugins: [
-      {
-        name: "omit-unused-sharp",
-        setup(builder) {
-          builder.onResolve({ filter: /^sharp$/ }, () => ({
-            path: "sharp",
-            namespace: "kokoro-sharp",
-          }));
-          builder.onLoad(
-            { filter: /.*/, namespace: "kokoro-sharp" },
-            () => ({
-              contents:
-                'export default function sharp() { throw new Error("Sharp is unavailable in the TTS-only executable"); }',
-              loader: "js",
-            }),
-          );
-        },
-      },
+      omitUnusedSharpPlugin(
+        "kokoro-sharp",
+        "Sharp is unavailable in the TTS-only executable",
+      ),
     ],
     target: "bun",
   });

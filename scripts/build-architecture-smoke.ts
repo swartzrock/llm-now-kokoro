@@ -1,37 +1,50 @@
-import { chmod, cp, mkdir, rm } from "node:fs/promises";
-import { basename, resolve } from "node:path";
+import { chmod, cp, mkdir, readdir, rm } from "node:fs/promises";
+import { basename, relative, resolve } from "node:path";
 
 import {
+  resolveRuntimeTarget,
+  SUPPORTED_RUNTIME_TARGETS,
+} from "../src/backend";
+import {
+  verifyLocalModelAssets,
+  verifyPinnedPhonemizerBundle,
+} from "../src/model-assets";
+import { ADDON_NAME } from "../src/native-runtime";
+import { assertInferenceArtifactPolicy } from "./artifact-policy";
+import {
+  ARCHITECTURE_ASSET_ROOT,
   ARCHITECTURE_CACHE_ROOT,
   MINIAUDIO_HEADER_PATH,
   verifyArchitectureAssets,
 } from "./architecture-assets";
+import { omitUnusedSharpPlugin } from "./build-plugins";
 
 export const ARCHITECTURE_DIST_ROOT = resolve(
   import.meta.dir,
   "../dist/architecture-smoke",
 );
-export const ARCHITECTURE_RUNTIME_ROOT = resolve(
+export const ARCHITECTURE_INSTALL_ROOT = resolve(
   ARCHITECTURE_DIST_ROOT,
-  "runtime",
+  "installed pack ユニコード",
+);
+export const ARCHITECTURE_RUNTIME_ROOT = resolve(
+  ARCHITECTURE_INSTALL_ROOT,
+  "runtime/onnx",
 );
 export const ARCHITECTURE_HELPER_PATH = resolve(
-  ARCHITECTURE_DIST_ROOT,
-  process.platform === "win32" ? "llm-now-kokoro-smoke.exe" : "llm-now-kokoro-smoke",
+  ARCHITECTURE_INSTALL_ROOT,
+  process.platform === "win32" ? "llm-now-kokoro.exe" : "llm-now-kokoro",
 );
 export const ARCHITECTURE_PLAYER_PATH = resolve(
-  ARCHITECTURE_RUNTIME_ROOT,
-  process.platform === "win32" ? "llm-now-kokoro-player.exe" : "llm-now-kokoro-player",
+  ARCHITECTURE_INSTALL_ROOT,
+  "runtime",
+  process.platform === "win32"
+    ? "llm-now-kokoro-player.exe"
+    : "llm-now-kokoro-player",
 );
 
 const TARGET = `${process.platform}-${process.arch}`;
-const SUPPORTED_TARGETS = new Set([
-  "darwin-x64",
-  "darwin-arm64",
-  "linux-x64",
-  "linux-arm64",
-  "win32-x64",
-]);
+const SUPPORTED_TARGETS = new Set<string>(SUPPORTED_RUNTIME_TARGETS);
 
 export async function buildArchitectureSmoke(): Promise<void> {
   if (Bun.version !== "1.3.14") {
@@ -42,17 +55,27 @@ export async function buildArchitectureSmoke(): Promise<void> {
   }
   const expectedTarget = process.env.KOKORO_EXPECTED_TARGET;
   if (expectedTarget && expectedTarget !== TARGET) {
-    throw new Error(`Runner target mismatch: expected ${expectedTarget}, found ${TARGET}`);
+    throw new Error(
+      `Runner target mismatch: expected ${expectedTarget}, found ${TARGET}`,
+    );
   }
 
   await verifyArchitectureAssets();
+  await verifyPinnedPhonemizerBundle(resolve(import.meta.dir, ".."));
   await rm(ARCHITECTURE_DIST_ROOT, { recursive: true, force: true });
   await mkdir(ARCHITECTURE_RUNTIME_ROOT, { recursive: true });
-  await copyNativeRuntime();
-  await buildPlayer();
+  await Promise.all([
+    copyNativeRuntime(),
+    cp(
+      resolve(ARCHITECTURE_ASSET_ROOT, "model"),
+      resolve(ARCHITECTURE_INSTALL_ROOT, "model"),
+      { recursive: true },
+    ),
+    buildPlayer(),
+  ]);
 
   const result = await Bun.build({
-    entrypoints: [resolve(import.meta.dir, "architecture-smoke.ts")],
+    entrypoints: [resolve(import.meta.dir, "../index.ts")],
     compile: {
       outfile: ARCHITECTURE_HELPER_PATH,
       autoloadBunfig: false,
@@ -62,23 +85,10 @@ export async function buildArchitectureSmoke(): Promise<void> {
     },
     minify: true,
     plugins: [
-      {
-        name: "omit-unused-sharp",
-        setup(builder) {
-          builder.onResolve({ filter: /^sharp$/ }, () => ({
-            path: "sharp",
-            namespace: "architecture-smoke-sharp",
-          }));
-          builder.onLoad(
-            { filter: /.*/, namespace: "architecture-smoke-sharp" },
-            () => ({
-              contents:
-                'export default function sharp() { throw new Error("Sharp is unavailable in the TTS helper"); }',
-              loader: "js",
-            }),
-          );
-        },
-      },
+      omitUnusedSharpPlugin(
+        "architecture-smoke-sharp",
+        "Sharp is unavailable in the TTS helper",
+      ),
     ],
   });
   if (!result.success) {
@@ -91,6 +101,10 @@ export async function buildArchitectureSmoke(): Promise<void> {
   if (process.platform !== "win32") {
     await chmod(ARCHITECTURE_HELPER_PATH, 0o755);
   }
+  await verifyLocalModelAssets(ARCHITECTURE_INSTALL_ROOT);
+  assertInferenceArtifactPolicy(
+    await listRelativeFiles(ARCHITECTURE_INSTALL_ROOT),
+  );
 }
 
 async function copyNativeRuntime(): Promise<void> {
@@ -98,16 +112,29 @@ async function copyNativeRuntime(): Promise<void> {
     import.meta.dir,
     `../node_modules/onnxruntime-node/bin/napi-v3/${process.platform}/${process.arch}`,
   );
-  const names =
-    process.platform === "darwin"
-      ? ["onnxruntime_binding.node", "libonnxruntime.1.21.0.dylib"]
-      : process.platform === "linux"
-        ? ["onnxruntime_binding.node", "libonnxruntime.so.1"]
-        : ["onnxruntime_binding.node", "onnxruntime.dll"];
+  const names = [ADDON_NAME, resolveRuntimeTarget().libraryName];
 
   for (const name of names) {
     await cp(resolve(sourceRoot, name), resolve(ARCHITECTURE_RUNTIME_ROOT, name));
   }
+}
+
+async function listRelativeFiles(root: string): Promise<string[]> {
+  const files: string[] = [];
+  async function walk(directory: string): Promise<void> {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const path = resolve(directory, entry.name);
+      if (entry.isDirectory()) {
+        await walk(path);
+      } else if (entry.isFile()) {
+        files.push(relative(root, path).replaceAll("\\", "/"));
+      } else {
+        throw new Error("Unsupported architecture artifact entry");
+      }
+    }
+  }
+  await walk(root);
+  return files;
 }
 
 async function buildPlayer(): Promise<void> {

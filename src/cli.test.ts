@@ -3,12 +3,14 @@ import { describe, expect, test } from "bun:test";
 import {
   type HelperDependencies,
   type SpeechAnalysis,
+  readBoundedInput,
   runHelperMain,
 } from "./cli";
 import {
   MAX_AUDIO_SAMPLES,
   MAX_DIAGNOSTIC_BYTES,
   MAX_NON_SPECIAL_TOKENS,
+  MAX_REQUEST_BYTES,
 } from "./limits";
 
 const encoder = new TextEncoder();
@@ -224,6 +226,78 @@ describe("internal helper operations", () => {
     expect(output.stderr).toEqual(["llm-now-kokoro: cancelled\n"]);
   });
 
+  test("does not report cancellation until active playback cleanup settles", async () => {
+    const events: string[] = [];
+    const output = { stdout: [] as string[], stderr: [] as string[] };
+    const controller = new AbortController();
+    let releaseCleanup: () => void = () => {};
+    const cleanup = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    let signalPlaybackStarted: () => void = () => {};
+    const playbackStarted = new Promise<void>((resolve) => {
+      signalPlaybackStarted = resolve;
+    });
+    const dependencies = dependenciesFor("cancel in flight", events, output);
+    dependencies.signal = controller.signal;
+    dependencies.play = async (_audio, signal) => {
+      events.push("play-start");
+      signalPlaybackStarted();
+      await new Promise<void>((_resolve, reject) => {
+        signal.addEventListener("abort", async () => {
+          events.push("cleanup-start");
+          await cleanup;
+          events.push("cleanup-finished");
+          reject(signal.reason);
+        }, { once: true });
+      });
+    };
+
+    let settled = false;
+    const result = runHelperMain(speakArguments, dependencies).finally(() => {
+      settled = true;
+    });
+    await playbackStarted;
+    controller.abort();
+    await Bun.sleep(0);
+
+    expect(settled).toBe(false);
+    expect(events).toContain("cleanup-start");
+    releaseCleanup();
+    expect(await result).toBe(130);
+    expect(events.at(-1)).toBe("cleanup-finished");
+    expect(output.stderr).toEqual(["llm-now-kokoro: cancelled\n"]);
+  });
+
+  test.each([
+    ["phonemization", "phonemization-timeout"],
+    ["inference", "inference-timeout"],
+  ] as const)("aborts active %s work at its stage deadline", async (stage, diagnostic) => {
+    const events: string[] = [];
+    const output = { stdout: [] as string[], stderr: [] as string[] };
+    const dependencies = dependenciesFor("deadline", events, output);
+    dependencies.deadlines = { [stage]: 1 };
+    const waitForAbort = (signal: AbortSignal) =>
+      new Promise<never>((_resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          events.push(`${stage}-aborted`);
+          reject(signal.reason);
+        }, { once: true });
+      });
+    if (stage === "phonemization") {
+      dependencies.inspectText = async (_text, signal) => waitForAbort(signal);
+    } else {
+      dependencies.synthesize = async (_analysis, signal) => waitForAbort(signal);
+    }
+
+    const exitCode = await runHelperMain(speakArguments, dependencies);
+
+    expect(exitCode).toBe(1);
+    expect(events).toContain(`${stage}-aborted`);
+    expect(events.some((event) => event.startsWith("play:"))).toBe(false);
+    expect(output.stderr).toEqual([`llm-now-kokoro: ${diagnostic}\n`]);
+  });
+
   test.each([
     [["info", "--protocol-major", "0"], "protocol-major-mismatch"],
     [["info", "--protocol-major", "2"], "protocol-major-mismatch"],
@@ -265,5 +339,64 @@ describe("exact protocol constants", () => {
     expect(limits.INFERENCE_TIMEOUT_MS).toBe(30_000);
     expect(limits.OVERALL_TIMEOUT_MS).toBe(120_000);
     expect(limits.MAX_DIAGNOSTIC_BYTES).toBe(16 * 1024);
+  });
+});
+
+describe("bounded stdin transport", () => {
+  test("combines bounded request chunks and clears the source buffers", async () => {
+    const first = encoder.encode('{"text":"hel');
+    const second = encoder.encode('lo"}');
+    const expected = encoder.encode('{"text":"hello"}');
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(first);
+        controller.enqueue(second);
+        controller.close();
+      },
+    });
+
+    const result = await readBoundedInput(
+      stream,
+      expected.byteLength,
+      new AbortController().signal,
+    );
+
+    expect(result).toEqual(expected);
+    expect(first.every((byte) => byte === 0)).toBe(true);
+    expect(second.every((byte) => byte === 0)).toBe(true);
+  });
+
+  test("cancels the reader immediately after the request byte limit", async () => {
+    let cancelled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(MAX_REQUEST_BYTES + 1));
+      },
+      cancel() {
+        cancelled = true;
+      },
+    });
+
+    await expect(readBoundedInput(
+      stream,
+      MAX_REQUEST_BYTES,
+      new AbortController().signal,
+    )).rejects.toThrow("request-too-large");
+    expect(cancelled).toBe(true);
+  });
+
+  test("cancels a pending reader when the helper is aborted", async () => {
+    let cancelled = false;
+    const controller = new AbortController();
+    const stream = new ReadableStream<Uint8Array>({
+      cancel() {
+        cancelled = true;
+      },
+    });
+    const pending = readBoundedInput(stream, MAX_REQUEST_BYTES, controller.signal);
+    controller.abort();
+
+    await expect(pending).rejects.toThrow("cancelled");
+    expect(cancelled).toBe(true);
   });
 });

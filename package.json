@@ -12,6 +12,7 @@
     "build": "bun run build.ts",
     "test": "bun test",
     "typecheck": "bun ./node_modules/typescript/bin/tsc --noEmit",
+    "smoke:offline": "bun scripts/run-offline-inference-smoke.ts",
     "smoke:architecture:prepare": "bun scripts/prepare-architecture-smoke.ts",
     "smoke:architecture": "bun scripts/run-architecture-smoke.ts"
   },

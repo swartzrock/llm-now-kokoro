@@ -89,19 +89,36 @@ describe("local model assets", () => {
 });
 
 describe("phonemizer inventory", () => {
-  test("binds the installed bundle and embedded data while recording no raw Wasm", async () => {
-    await verifyPinnedPhonemizerBundle("/repository", async (path) => {
-      expect(path).toBe(
-        "/repository/node_modules/phonemizer/dist/phonemizer.js",
-      );
-      return {
-        bytes: PHONEMIZER_INVENTORY.bundle.bytes,
-        isRegularFile: true,
-        sha256: PHONEMIZER_INVENTORY.bundle.sha256,
-      };
-    });
+  test("binds and audits the installed Emscripten payload", async () => {
+    await verifyPinnedPhonemizerBundle(
+      "/repository",
+      async (path) => {
+        expect(path).toBe(
+          "/repository/node_modules/phonemizer/dist/phonemizer.js",
+        );
+        return {
+          bytes: PHONEMIZER_INVENTORY.bundle.bytes,
+          isRegularFile: true,
+          sha256: PHONEMIZER_INVENTORY.bundle.sha256,
+        };
+      },
+      async () => ({
+        compressedBytes: PHONEMIZER_INVENTORY.embeddedGzip.bytes,
+        compressedSha256: PHONEMIZER_INVENTORY.embeddedGzip.sha256,
+        decompressedBytes: PHONEMIZER_INVENTORY.decompressedData.bytes,
+        decompressedSha256: PHONEMIZER_INVENTORY.decompressedData.sha256,
+        ...PHONEMIZER_INVENTORY.wasmAudit,
+      }),
+    );
 
-    expect(PHONEMIZER_INVENTORY.rawWasmIdentified).toBe(false);
+    expect(PHONEMIZER_INVENTORY.runtimeFormat).toBe(
+      "emscripten-javascript-with-embedded-gzip-data",
+    );
+    expect(PHONEMIZER_INVENTORY.wasmAudit).toEqual({
+      wasmBinaryIdentifierPresent: true,
+      webAssemblyApiPresent: false,
+      wasmMagicPresent: false,
+    });
     expect(PHONEMIZER_INVENTORY.embeddedGzip.sha256).toBe(
       "4b4454422468c6195d70a3f50eaed157293d6a7af3e509a0612c2abcdb7defa5",
     );
@@ -109,6 +126,9 @@ describe("phonemizer inventory", () => {
       "6262621f3f8267fb61ef41fe7af75b8fe7e2315d6c9092afd29d7629bb21a60b",
     );
     expect(PHONEMIZER_INVENTORY.releaseStatus).toStartWith("blocked-");
+    expect(PHONEMIZER_INVENTORY.licenseAudit.embeddedEngineLicense).toBe(
+      "GPL-3.0-or-later",
+    );
   });
 
   test("rejects a missing or corrupt installed phonemizer bundle", async () => {
@@ -117,5 +137,25 @@ describe("phonemizer inventory", () => {
         throw new Error("missing path should remain private");
       }),
     ).rejects.toThrow("phonemizer-bundle-invalid");
+  });
+
+  test("rejects a changed embedded phonemizer payload", async () => {
+    await expect(
+      verifyPinnedPhonemizerBundle(
+        "/repository",
+        async () => ({
+          bytes: PHONEMIZER_INVENTORY.bundle.bytes,
+          isRegularFile: true,
+          sha256: PHONEMIZER_INVENTORY.bundle.sha256,
+        }),
+        async () => ({
+          compressedBytes: PHONEMIZER_INVENTORY.embeddedGzip.bytes,
+          compressedSha256: "changed",
+          decompressedBytes: PHONEMIZER_INVENTORY.decompressedData.bytes,
+          decompressedSha256: PHONEMIZER_INVENTORY.decompressedData.sha256,
+          ...PHONEMIZER_INVENTORY.wasmAudit,
+        }),
+      ),
+    ).rejects.toThrow("phonemizer-payload-invalid");
   });
 });

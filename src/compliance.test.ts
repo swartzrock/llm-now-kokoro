@@ -33,7 +33,8 @@ describe("release-oriented repository posture", () => {
       "4b4454422468c6195d70a3f50eaed157293d6a7af3e509a0612c2abcdb7defa5",
     );
     expect(notices).toContain("No raw WebAssembly module was identified");
-    expect(releasing).toContain("BLOCKED");
+    expect(releasing).toContain("**BLOCKED.**");
+    expect(releasing).not.toContain("UNBLOCKED");
     expect(releasing).toContain("source/relink");
   });
 });

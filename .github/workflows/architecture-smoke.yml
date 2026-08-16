@@ -44,5 +44,7 @@ jobs:
       - if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
       - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun test
+      - run: bun run typecheck
       - run: bun run smoke:architecture:prepare
       - run: bun run smoke:architecture

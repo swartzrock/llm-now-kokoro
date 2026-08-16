@@ -17,6 +17,15 @@
     "speed-1.0",
     "bundled-player-stdin"
   ],
+  "capabilityDefinitions": {
+    "stdin-json-v1": "speak accepts exactly one bounded UTF-8 JSON request on stdin",
+    "silent-self-test": "successful self-test writes no stdout or stderr bytes",
+    "native-onnx-cpu": "inference uses the native ONNX Runtime CPU backend only",
+    "local-q8": "the fixed q8 model is loaded only from the installed pack",
+    "voice-af-heart": "the only supported voice is af_heart",
+    "speed-1.0": "speech synthesis uses fixed speed 1.0",
+    "bundled-player-stdin": "canonical bounded WAV is sent to the bundled player on stdin"
+  },
   "speakRequest": {
     "transport": "one UTF-8 JSON value followed by EOF on stdin",
     "schema": {
@@ -28,8 +37,50 @@
       }
     }
   },
+  "infoResponse": {
+    "transport": "one compact UTF-8 JSON object plus LF on stdout",
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["helperVersion", "protocolMajor", "capabilities", "engine"],
+      "properties": {
+        "helperVersion": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "protocolMajor": { "const": 1 },
+        "capabilities": {
+          "type": "array",
+          "prefixItems": [
+            { "const": "stdin-json-v1" },
+            { "const": "silent-self-test" },
+            { "const": "native-onnx-cpu" },
+            { "const": "local-q8" },
+            { "const": "voice-af-heart" },
+            { "const": "speed-1.0" },
+            { "const": "bundled-player-stdin" }
+          ],
+          "items": false,
+          "minItems": 7,
+          "maxItems": 7,
+          "uniqueItems": true
+        },
+        "engine": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["inference", "model", "voice", "speed"],
+          "properties": {
+            "inference": { "const": "onnxruntime-node-cpu" },
+            "model": { "const": "q8" },
+            "voice": { "const": "af_heart" },
+            "speed": { "const": 1 }
+          }
+        }
+      }
+    }
+  },
   "outputs": {
-    "info": "one compact JSON object plus LF on stdout",
+    "info": "infoResponse",
     "selfTestSuccess": "no stdout or stderr bytes",
     "speakSuccess": "no stdout or stderr bytes",
     "failure": "one value-free diagnostic plus LF on stderr"

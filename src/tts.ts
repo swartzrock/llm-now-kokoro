@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import { isAbsolute, resolve } from "node:path";
 
 import type {
@@ -6,14 +5,28 @@ import type {
   SpeechAnalysis,
   SynthesizedAudio,
 } from "./cli";
+import { withDeadline } from "./cli";
 import {
   FIXED_SPEED,
   FIXED_VOICE,
   FIXED_VOICE_RELATIVE_PATH,
 } from "./embedded-voices";
-import { MAX_AUDIO_SAMPLES, MAX_NON_SPECIAL_TOKENS } from "./limits";
+import { createSupervisedSpeechEngine } from "./engine-process";
+import {
+  AUDIO_SAMPLE_RATE_HZ,
+  INFERENCE_TIMEOUT_MS,
+  MAX_AUDIO_SAMPLES,
+  MAX_NON_SPECIAL_TOKENS,
+  PHONEMIZATION_TIMEOUT_MS,
+} from "./limits";
 import { verifyLocalModelAssets } from "./model-assets";
 import { prepareNativeRuntime } from "./native-runtime";
+import {
+  playAudio,
+  type PlaybackOptions,
+  verifyBundledPlayer,
+} from "./playback";
+import { operationFailure, protocolFailure } from "./result";
 
 const MODEL_ID = "model";
 const MODEL_DTYPE = "q8" as const;
@@ -31,14 +44,14 @@ interface RawAudio {
 }
 
 interface KokoroModel {
-  tokenizer(
-    text: string,
-    options: { truncation: false },
-  ): { input_ids: TokenIds };
   generate_from_ids(
     inputIds: TokenIds,
     options: { voice: typeof FIXED_VOICE; speed: typeof FIXED_SPEED },
   ): Promise<RawAudio>;
+}
+
+interface KokoroTokenizer {
+  (text: string, options: { truncation: false }): { input_ids: TokenIds };
 }
 
 interface SpeechLibraries {
@@ -53,10 +66,12 @@ interface SpeechLibraries {
     modelId: string,
     options: { device: "cpu"; dtype: typeof MODEL_DTYPE },
   ): Promise<KokoroModel>;
+  loadTokenizer(modelId: string): Promise<KokoroTokenizer>;
   phonemize(text: string, language: "a"): Promise<string>;
 }
 
 export interface NativeSpeechEngine {
+  dispose?(): Promise<void>;
   inspectText(text: string, signal: AbortSignal): Promise<SpeechAnalysis>;
   synthesize(
     analysis: SpeechAnalysis,
@@ -66,9 +81,20 @@ export interface NativeSpeechEngine {
 
 export interface SpeechEngineDependencies {
   loadLibraries?: () => Promise<SpeechLibraries>;
+  play?: (
+    audio: SynthesizedAudio,
+    packRoot: string,
+    signal: AbortSignal,
+    options?: PlaybackOptions,
+  ) => Promise<void>;
   prepareRuntime?: (packRoot: string) => Promise<unknown>;
   readVoice?: (path: string) => Promise<ArrayBuffer>;
   verifyAssets?: (packRoot: string) => Promise<void>;
+  verifyPlayer?: (packRoot: string) => Promise<unknown>;
+}
+
+interface PreparedSpeechPack {
+  playerPath?: string;
 }
 
 export async function createNativeSpeechEngine(
@@ -82,14 +108,20 @@ export async function createNativeSpeechEngine(
 async function prepareNativeSpeechPack(
   packRoot: string,
   dependencies: SpeechEngineDependencies,
-): Promise<void> {
+): Promise<PreparedSpeechPack> {
   if (!isAbsolute(packRoot)) throw new Error("pack-root-not-absolute");
   await (dependencies.verifyAssets ?? verifyLocalModelAssets)(packRoot);
   await (dependencies.prepareRuntime ?? prepareNativeRuntime)(packRoot);
+  const playerPath = await (
+    dependencies.verifyPlayer ?? verifyBundledPlayer
+  )(packRoot);
   installVoiceProvider(
     resolve(packRoot, FIXED_VOICE_RELATIVE_PATH),
     dependencies.readVoice ?? readVoiceFile,
   );
+  return {
+    playerPath: typeof playerPath === "string" ? playerPath : undefined,
+  };
 }
 
 async function loadPreparedSpeechEngine(
@@ -103,15 +135,22 @@ async function loadPreparedSpeechEngine(
   libraries.env.useBrowserCache = false;
   libraries.env.useFSCache = false;
 
-  let model: KokoroModel;
+  let tokenizer: KokoroTokenizer;
   try {
-    model = await libraries.fromPretrained(MODEL_ID, {
-      device: "cpu",
-      dtype: MODEL_DTYPE,
-    });
+    tokenizer = await libraries.loadTokenizer(MODEL_ID);
   } catch {
-    throw new Error("native-model-load-failed");
+    throw new Error("tokenizer-load-failed");
   }
+  let modelPromise: Promise<KokoroModel> | undefined;
+  const loadModel = () =>
+    (modelPromise ??= libraries
+      .fromPretrained(MODEL_ID, {
+        device: "cpu",
+        dtype: MODEL_DTYPE,
+      })
+      .catch(() => {
+        throw new Error("native-model-load-failed");
+      }));
 
   return {
     async inspectText(text, signal) {
@@ -125,7 +164,7 @@ async function loadPreparedSpeechEngine(
       throwIfAborted(signal);
       let inputIds: TokenIds;
       try {
-        ({ input_ids: inputIds } = model.tokenizer(phonemes, {
+        ({ input_ids: inputIds } = tokenizer(phonemes, {
           truncation: false,
         }));
       } catch {
@@ -151,6 +190,7 @@ async function loadPreparedSpeechEngine(
       }
       let audio: RawAudio;
       try {
+        const model = await loadModel();
         audio = await model.generate_from_ids(analysis.synthesisInput, {
           voice: FIXED_VOICE,
           speed: FIXED_SPEED,
@@ -159,17 +199,25 @@ async function loadPreparedSpeechEngine(
         throw new Error("native-inference-failed");
       }
       throwIfAborted(signal);
+      if (audio.audio.length > MAX_AUDIO_SAMPLES) {
+        audio.audio.fill(0);
+        throw protocolFailure("audio-sample-limit");
+      }
       if (
-        audio.sampling_rate !== 24_000 ||
-        audio.audio.length === 0 ||
-        audio.audio.length > MAX_AUDIO_SAMPLES
+        audio.sampling_rate !== AUDIO_SAMPLE_RATE_HZ ||
+        audio.audio.length === 0
       ) {
         throw new Error("invalid-audio-result");
       }
-      return {
-        bytes: new Uint8Array(audio.toWav()),
-        sampleCount: audio.audio.length,
-      };
+      const sampleCount = audio.audio.length;
+      try {
+        return {
+          bytes: new Uint8Array(audio.toWav()),
+          sampleCount,
+        };
+      } finally {
+        audio.audio.fill(0);
+      }
     },
   };
 }
@@ -179,18 +227,25 @@ export function createNativeHelperDependencies(
   dependencies: SpeechEngineDependencies = {},
 ): Pick<
   HelperDependencies,
-  "inspectText" | "preflight" | "selfTest" | "synthesize"
+  "cleanup" | "inspectText" | "play" | "preflight" | "selfTest" | "synthesize"
 > {
-  let preflightPromise: Promise<void> | undefined;
+  let preflightPromise: Promise<PreparedSpeechPack> | undefined;
   let enginePromise: Promise<NativeSpeechEngine> | undefined;
   const preflight = () =>
     (preflightPromise ??= prepareNativeSpeechPack(packRoot, dependencies));
   const engine = () =>
     (enginePromise ??= preflight().then(() =>
-      loadPreparedSpeechEngine(packRoot, dependencies),
+      dependencies.loadLibraries
+        ? loadPreparedSpeechEngine(packRoot, dependencies)
+        : createSupervisedSpeechEngine(packRoot),
     ));
 
   return {
+    cleanup: async () => {
+      const activeEngine = enginePromise;
+      enginePromise = undefined;
+      await (await activeEngine)?.dispose?.();
+    },
     preflight: async (signal) => {
       throwIfAborted(signal);
       await preflight();
@@ -200,14 +255,38 @@ export function createNativeHelperDependencies(
       (await engine()).inspectText(text, signal),
     synthesize: async (analysis, signal) =>
       (await engine()).synthesize(analysis, signal),
+    play: async (audio, signal) => {
+      const prepared = await preflight();
+      return (dependencies.play ?? playAudio)(audio, packRoot, signal, {
+        verifiedPlayerPath: prepared.playerPath,
+      });
+    },
     selfTest: async (signal) => {
       const ready = await engine();
-      const analysis = await ready.inspectText(SELF_TEST_TEXT, signal);
+      const analysis = await withDeadline(
+        PHONEMIZATION_TIMEOUT_MS,
+        signal,
+        operationFailure("phonemization-timeout"),
+        (stageSignal) => ready.inspectText(SELF_TEST_TEXT, stageSignal),
+      );
       if (analysis.nonSpecialTokenCount > MAX_NON_SPECIAL_TOKENS) {
         throw new Error("self-test-input-invalid");
       }
-      const audio = await ready.synthesize(analysis, signal);
-      audio.bytes.fill(0);
+      const audio = await withDeadline(
+        INFERENCE_TIMEOUT_MS,
+        signal,
+        operationFailure("inference-timeout"),
+        (stageSignal) => ready.synthesize(analysis, stageSignal),
+      );
+      try {
+        const prepared = await preflight();
+        await (dependencies.play ?? playAudio)(audio, packRoot, signal, {
+          checkOnly: true,
+          verifiedPlayerPath: prepared.playerPath,
+        });
+      } finally {
+        audio.bytes.fill(0);
+      }
     },
   };
 }
@@ -219,6 +298,8 @@ async function loadSpeechLibraries(): Promise<SpeechLibraries> {
     env: transformers.env,
     fromPretrained: (modelId, options) =>
       kokoro.KokoroTTS.from_pretrained(modelId, options) as Promise<KokoroModel>,
+    loadTokenizer: (modelId) =>
+      transformers.AutoTokenizer.from_pretrained(modelId) as Promise<KokoroTokenizer>,
     phonemize: kokoro.phonemize,
   };
 }
@@ -241,11 +322,7 @@ function installVoiceProvider(
 }
 
 async function readVoiceFile(path: string): Promise<ArrayBuffer> {
-  const bytes = await readFile(path);
-  return bytes.buffer.slice(
-    bytes.byteOffset,
-    bytes.byteOffset + bytes.byteLength,
-  ) as ArrayBuffer;
+  return Bun.file(path).arrayBuffer();
 }
 
 function isTokenIds(value: unknown): value is TokenIds {

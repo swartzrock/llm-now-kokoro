@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { lstat, readdir } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
+import { gunzipSync } from "node:zlib";
 
 export const MODEL_REVISION =
   "1939ad2a8e416c0acfeecc08a694d14ef25f2231";
@@ -48,6 +49,8 @@ export const MODEL_ASSETS: readonly PinnedAsset[] = Object.freeze([
 
 export const PHONEMIZER_INVENTORY = Object.freeze({
   packageVersion: "1.2.1",
+  upstreamCommit: "6835144b7ee9043129222549c1ed2f6a27216278",
+  runtimeFormat: "emscripten-javascript-with-embedded-gzip-data",
   bundle: {
     relativePath: "node_modules/phonemizer/dist/phonemizer.js",
     bytes: 1_322_380,
@@ -61,7 +64,16 @@ export const PHONEMIZER_INVENTORY = Object.freeze({
     bytes: 890_802,
     sha256: "6262621f3f8267fb61ef41fe7af75b8fe7e2315d6c9092afd29d7629bb21a60b",
   },
-  rawWasmIdentified: false,
+  wasmAudit: {
+    wasmBinaryIdentifierPresent: true,
+    webAssemblyApiPresent: false,
+    wasmMagicPresent: false,
+  },
+  licenseAudit: {
+    packageMetadata: "Apache-2.0",
+    embeddedEngine: "eSpeak NG",
+    embeddedEngineLicense: "GPL-3.0-or-later",
+  },
   releaseStatus: "blocked-pending-source-relink-and-license-audit",
 });
 
@@ -69,6 +81,16 @@ interface InspectedFile {
   bytes: number;
   isRegularFile: boolean;
   sha256: string;
+}
+
+interface InspectedPhonemizerPayload {
+  compressedBytes: number;
+  compressedSha256: string;
+  decompressedBytes: number;
+  decompressedSha256: string;
+  wasmBinaryIdentifierPresent: boolean;
+  wasmMagicPresent: boolean;
+  webAssemblyApiPresent: boolean;
 }
 
 export interface AssetVerificationDependencies {
@@ -118,6 +140,9 @@ export async function verifyLocalModelAssets(
 export async function verifyPinnedPhonemizerBundle(
   repositoryRoot = resolve(import.meta.dir, ".."),
   inspectFile: (path: string) => Promise<InspectedFile> = inspectPinnedFile,
+  inspectPayload: (
+    path: string,
+  ) => Promise<InspectedPhonemizerPayload> = inspectPinnedPhonemizerPayload,
 ): Promise<void> {
   const expected = PHONEMIZER_INVENTORY.bundle;
   let actual: InspectedFile;
@@ -133,6 +158,28 @@ export async function verifyPinnedPhonemizerBundle(
   ) {
     throw new Error("phonemizer-bundle-invalid");
   }
+
+  let payload: InspectedPhonemizerPayload;
+  try {
+    payload = await inspectPayload(
+      resolve(repositoryRoot, expected.relativePath),
+    );
+  } catch {
+    throw new Error("phonemizer-payload-invalid");
+  }
+  const expectedWasmAudit = PHONEMIZER_INVENTORY.wasmAudit;
+  if (
+    payload.compressedBytes !== PHONEMIZER_INVENTORY.embeddedGzip.bytes ||
+    payload.compressedSha256 !== PHONEMIZER_INVENTORY.embeddedGzip.sha256 ||
+    payload.decompressedBytes !== PHONEMIZER_INVENTORY.decompressedData.bytes ||
+    payload.decompressedSha256 !== PHONEMIZER_INVENTORY.decompressedData.sha256 ||
+    payload.wasmBinaryIdentifierPresent !==
+      expectedWasmAudit.wasmBinaryIdentifierPresent ||
+    payload.webAssemblyApiPresent !== expectedWasmAudit.webAssemblyApiPresent ||
+    payload.wasmMagicPresent !== expectedWasmAudit.wasmMagicPresent
+  ) {
+    throw new Error("phonemizer-payload-invalid");
+  }
 }
 
 async function inspectPinnedFile(path: string): Promise<InspectedFile> {
@@ -146,6 +193,30 @@ async function inspectPinnedFile(path: string): Promise<InspectedFile> {
     bytes: metadata.size,
     isRegularFile: true,
     sha256: hash.digest("hex"),
+  };
+}
+
+async function inspectPinnedPhonemizerPayload(
+  path: string,
+): Promise<InspectedPhonemizerPayload> {
+  const source = await Bun.file(path).text();
+  let largest = Buffer.alloc(0);
+  for (const match of source.matchAll(/"(H4sI[A-Za-z0-9+/=]+)"/g)) {
+    const compressed = Buffer.from(match[1]!, "base64");
+    if (compressed.byteLength > largest.byteLength) largest = compressed;
+  }
+  if (largest.byteLength === 0) throw new Error("missing-embedded-gzip");
+  const decompressed = gunzipSync(largest);
+  return {
+    compressedBytes: largest.byteLength,
+    compressedSha256: createHash("sha256").update(largest).digest("hex"),
+    decompressedBytes: decompressed.byteLength,
+    decompressedSha256: createHash("sha256")
+      .update(decompressed)
+      .digest("hex"),
+    wasmBinaryIdentifierPresent: source.includes("wasmBinary"),
+    webAssemblyApiPresent: source.includes("WebAssembly"),
+    wasmMagicPresent: decompressed.indexOf(Buffer.from([0, 97, 115, 109])) >= 0,
   };
 }
 

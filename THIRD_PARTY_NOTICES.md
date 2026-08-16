@@ -31,8 +31,11 @@ its package metadata:
 - That literal after gzip decompression: 890,802 bytes, SHA-256
   `6262621f3f8267fb61ef41fe7af75b8fe7e2315d6c9092afd29d7629bb21a60b`.
 
-The bundle definitely carries eSpeak-derived compiled JavaScript/data. No raw WebAssembly module was identified: the installed bundle has no `WebAssembly`
-token, `AGFzbQ` base64 prefix, or decompressed `\0asm` magic. This conflicts
+The build verifies the bundle, compressed literal, decompressed payload, and
+format markers before compilation. The bundle definitely carries eSpeak-derived
+Emscripten JavaScript/data. It contains a `wasmBinary` identifier but no
+`WebAssembly` API token, `AGFzbQ` base64 prefix, or decompressed `\0asm` magic.
+No raw WebAssembly module was identified. This conflicts
 with the plan's description of a pinned eSpeak phonemizer WASM resource and
 must be resolved against upstream source before release. The actual bundle and
 data hashes above are the Phase 1 inventory; they do not resolve GPL source,

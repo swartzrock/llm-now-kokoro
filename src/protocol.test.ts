@@ -35,7 +35,7 @@ describe("helper operation protocol", () => {
           "--protocol-major",
           String(PROTOCOL_MAJOR),
         ]),
-      ).toEqual({ operation, requiredCapabilities: [] });
+      ).toEqual({ operation });
     },
   );
 
@@ -48,10 +48,7 @@ describe("helper operation protocol", () => {
         "--require-capability",
         PROTOCOL_CAPABILITIES[0],
       ]),
-    ).toEqual({
-      operation: "info",
-      requiredCapabilities: [PROTOCOL_CAPABILITIES[0]],
-    });
+    ).toEqual({ operation: "info" });
   });
 
   test.each([
@@ -120,6 +117,19 @@ describe("speak request protocol", () => {
 });
 
 describe("canonical protocol fixtures", () => {
+  test("the speak fixture decodes to the exact canonical text", async () => {
+    const fixture = new Uint8Array(await Bun.file(
+      resolve(import.meta.dir, "../protocol/v1/fixtures/speak-valid.stdin.json"),
+    ).arrayBuffer());
+
+    expect(new TextDecoder().decode(fixture)).toBe(
+      '{"text":"\\"Hello\\"\\nGrüße 😀; $(echo no) | & < >"}\n',
+    );
+    expect(decodeSpeakRequest(fixture)).toEqual({
+      text: '"Hello"\nGrüße 😀; $(echo no) | & < >',
+    });
+  });
+
   test("the generated info response equals the golden fixture byte-for-byte", async () => {
     const fixture = await Bun.file(
       resolve(import.meta.dir, "../protocol/v1/fixtures/info-success.stdout.json"),
@@ -134,7 +144,27 @@ describe("canonical protocol fixtures", () => {
     ).json();
 
     expect(contract.protocolMajor).toBe(PROTOCOL_MAJOR);
-    expect(contract.capabilities).toEqual(PROTOCOL_CAPABILITIES);
+    expect(contract.capabilities).toEqual(Array.from(PROTOCOL_CAPABILITIES));
+    expect(Object.keys(contract.capabilityDefinitions)).toEqual(
+      Array.from(PROTOCOL_CAPABILITIES),
+    );
+    expect(contract.infoResponse.schema.required).toEqual([
+      "helperVersion",
+      "protocolMajor",
+      "capabilities",
+      "engine",
+    ]);
+    expect(
+      contract.infoResponse.schema.properties.capabilities.prefixItems.map(
+        (item: { const: string }) => item.const,
+      ),
+    ).toEqual(Array.from(PROTOCOL_CAPABILITIES));
+    expect(contract.infoResponse.schema.properties.engine.properties).toEqual({
+      inference: { const: "onnxruntime-node-cpu" },
+      model: { const: "q8" },
+      voice: { const: "af_heart" },
+      speed: { const: 1 },
+    });
     expect(contract.limits.requestBytes).toBe(MAX_REQUEST_BYTES);
     expect(contract.limits.textUnicodeScalars).toBe(MAX_TEXT_SCALARS);
   });

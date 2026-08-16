@@ -1,59 +1,110 @@
-import { resolve } from "node:path";
-import { mkdir } from "node:fs/promises";
-
-import { ARCHITECTURE_ASSET_ROOT } from "./architecture-assets";
+import { MAX_DIAGNOSTIC_BYTES } from "../src/limits";
 import {
   ARCHITECTURE_HELPER_PATH,
-  ARCHITECTURE_PLAYER_PATH,
-  ARCHITECTURE_RUNTIME_ROOT,
+  ARCHITECTURE_INSTALL_ROOT,
   buildArchitectureSmoke,
 } from "./build-architecture-smoke";
+import { runOfflineInferenceSmoke } from "./run-offline-inference-smoke";
 
 await buildArchitectureSmoke();
+await runOfflineInferenceSmoke(ARCHITECTURE_INSTALL_ROOT);
 
 const playerMode = process.argv.includes("--play") ? "play" : "check";
-const temporaryDirectory = resolve(
-  import.meta.dir,
-  "../.tmp-architecture-smoke/runtime-tmp",
+const info = await invokeHelper(["info", "--protocol-major", "1"]);
+const parsedInfo = JSON.parse(info.stdout) as {
+  engine?: {
+    inference?: string;
+    model?: string;
+    voice?: string;
+    speed?: number;
+  };
+  protocolMajor?: number;
+};
+if (
+  info.stderr !== "" ||
+  parsedInfo.protocolMajor !== 1 ||
+  parsedInfo.engine?.inference !== "onnxruntime-node-cpu" ||
+  parsedInfo.engine.model !== "q8" ||
+  parsedInfo.engine.voice !== "af_heart" ||
+  parsedInfo.engine.speed !== 1
+) {
+  throw new Error("Architecture helper returned invalid info");
+}
+
+const operation = playerMode === "play" ? "speak" : "self-test";
+const result = await invokeHelper(
+  [operation, "--protocol-major", "1"],
+  operation === "speak"
+    ? new TextEncoder().encode(
+        JSON.stringify({ text: "Native sidecar architecture check." }),
+      )
+    : undefined,
 );
-await mkdir(temporaryDirectory, { recursive: true });
-const child = Bun.spawn(
-  [
-    ARCHITECTURE_HELPER_PATH,
-    "--runtime-root",
-    ARCHITECTURE_RUNTIME_ROOT,
-    "--asset-root",
-    ARCHITECTURE_ASSET_ROOT,
-    "--player",
-    ARCHITECTURE_PLAYER_PATH,
-    "--player-mode",
+if (result.stdout !== "" || result.stderr !== "") {
+  throw new Error("Architecture helper was not silent");
+}
+console.log(
+  JSON.stringify({
+    status: "ok",
+    helper: "production",
+    target: `${process.platform}-${process.arch}`,
+    model: "q8",
+    voice: "af_heart",
     playerMode,
-  ],
-  {
-    cwd: ARCHITECTURE_RUNTIME_ROOT,
-    env: {
-      ...process.env,
-      TMPDIR: temporaryDirectory,
-      TEMP: temporaryDirectory,
-      TMP: temporaryDirectory,
-      LANG: "C.UTF-8",
-      HTTP_PROXY: "http://127.0.0.1:9",
-      HTTPS_PROXY: "http://127.0.0.1:9",
-      NO_PROXY: "",
-    },
-    stdin: "ignore",
+  }),
+);
+
+async function invokeHelper(
+  arguments_: string[],
+  stdin?: Uint8Array,
+): Promise<{ stdout: string; stderr: string }> {
+  const child = Bun.spawn([ARCHITECTURE_HELPER_PATH, ...arguments_], {
+    cwd: ARCHITECTURE_INSTALL_ROOT,
+    env: process.platform === "linux" ? { LANG: "C.UTF-8" } : {},
+    stdin: "pipe",
     stdout: "pipe",
     stderr: "pipe",
-  },
-);
-const [exitCode, stdout, stderr] = await Promise.all([
-  child.exited,
-  new Response(child.stdout).text(),
-  new Response(child.stderr).text(),
-]);
-if (exitCode !== 0) {
-  throw new Error(`Architecture helper failed (${exitCode}): ${stderr.slice(0, 2_000)}`);
+    windowsHide: true,
+  });
+  if (stdin) child.stdin.write(stdin);
+  child.stdin.end();
+  const [exitCode, stdout, stderr] = await Promise.all([
+    child.exited,
+    readBounded(child.stdout),
+    readBounded(child.stderr),
+  ]);
+  if (exitCode !== 0) {
+    throw new Error(`Architecture helper failed with exit ${exitCode}`);
+  }
+  return { stdout, stderr };
 }
-const result = JSON.parse(stdout) as { status?: string };
-if (result.status !== "ok") throw new Error("Architecture helper returned invalid output");
-console.log(stdout.trim());
+
+async function readBounded(
+  stream: ReadableStream<Uint8Array>,
+): Promise<string> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      chunks.push(next.value);
+      total += next.value.byteLength;
+      if (total > MAX_DIAGNOSTIC_BYTES) {
+        await reader.cancel().catch(() => {});
+        throw new Error("Architecture helper output exceeded its protocol bound");
+      }
+    }
+    const bytes = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } finally {
+    for (const chunk of chunks) chunk.fill(0);
+    reader.releaseLock();
+  }
+}

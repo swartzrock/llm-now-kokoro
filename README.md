@@ -30,12 +30,15 @@ Use exactly Bun 1.3.14:
 ONNXRUNTIME_NODE_INSTALL_CUDA=skip bun install --frozen-lockfile
 bun test src/protocol.test.ts src/cli.test.ts src/compliance.test.ts
 bun run typecheck
+bun run smoke:offline -- "/absolute/assembled/pack root"
 bun run smoke:architecture
 ```
 
-The architecture smoke is test scaffolding for a fixed, non-user phrase. It
-does not establish a general CLI surface. Model preparation may use the network
-only in build or CI setup; the installed helper never may.
+Pass an assembled pack root to `smoke:offline`; it replaces `fetch` with a hard
+failure and performs fixed q8 inference from installed files. The
+architecture smoke is test scaffolding for a fixed, non-user phrase. It does
+not establish a general CLI surface. Model preparation may use the network only
+in build or CI setup; the installed helper never may.
 
 ## Release status
 

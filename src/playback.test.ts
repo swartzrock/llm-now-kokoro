@@ -1,125 +1,446 @@
 import { describe, expect, test } from "bun:test";
 
-import { playAudio } from "./playback";
+import { MAX_DIAGNOSTIC_BYTES } from "./limits";
+import {
+  type PlaybackDependencies,
+  playAudio,
+  validateCanonicalWav,
+  verifyBundledPlayer,
+} from "./playback";
+import { operationFailure } from "./result";
 
-function emptyStream(): ReadableStream<Uint8Array> {
-  return new Blob([]).stream();
+const packRoot = "/packs/with spaces/ユニコード";
+const signal = new AbortController().signal;
+
+function canonicalWav(sampleCount = 2): {
+  bytes: Uint8Array;
+  sampleCount: number;
+} {
+  const bytes = new Uint8Array(44 + sampleCount * 4);
+  const view = new DataView(bytes.buffer);
+  writeAscii(bytes, 0, "RIFF");
+  view.setUint32(4, bytes.length - 8, true);
+  writeAscii(bytes, 8, "WAVE");
+  writeAscii(bytes, 12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 3, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, 24_000, true);
+  view.setUint32(28, 96_000, true);
+  view.setUint16(32, 4, true);
+  view.setUint16(34, 32, true);
+  writeAscii(bytes, 36, "data");
+  view.setUint32(40, sampleCount * 4, true);
+  return { bytes, sampleCount };
 }
 
-describe("playAudio", () => {
-  test("saves a WAV, invokes absolute afplay without a shell, and waits before cleanup", async () => {
-    const events: string[] = [];
-    let finishPlayback: (exitCode: number) => void = () => {};
+function writeAscii(bytes: Uint8Array, offset: number, value: string): void {
+  for (let index = 0; index < value.length; index += 1) {
+    bytes[offset + index] = value.charCodeAt(index);
+  }
+}
+
+function metadata(kind: "directory" | "file" | "socket", uid = 501) {
+  return {
+    mode: kind === "directory" ? 0o700 : 0o600,
+    uid,
+    isDirectory: () => kind === "directory",
+    isFile: () => kind === "file",
+    isSocket: () => kind === "socket",
+    isSymbolicLink: () => false,
+  };
+}
+
+function baseDependencies(
+  overrides: Partial<PlaybackDependencies> = {},
+): PlaybackDependencies {
+  return {
+    platform: "darwin",
+    access: async () => {},
+    canonicalize: async (path) => path,
+    inspect: async (path) =>
+      path === packRoot || path === `${packRoot}/runtime`
+        ? metadata("directory")
+        : metadata("file"),
+    ...overrides,
+  };
+}
+
+function closedStream(bytes: Uint8Array = new Uint8Array()): ReadableStream<Uint8Array> {
+  return new Blob([bytes]).stream();
+}
+
+describe("bundled playback", () => {
+  test("streams canonical WAV to the absolute bundled player with no inherited environment", async () => {
+    const audio = canonicalWav();
+    const written: number[] = [];
+    let command: string[] = [];
+    let spawnOptions: unknown = {};
+    let resolveExit: (code: number) => void = () => {};
     const exited = new Promise<number>((resolve) => {
-      finishPlayback = resolve;
+      resolveExit = resolve;
     });
-    let command: string[] | undefined;
-    let spawnOptions: unknown;
 
-    const playback = playAudio(
-      {
-        save: async (path) => {
-          events.push(`save:${path}`);
-        },
+    await playAudio(audio, packRoot, signal, { checkOnly: true }, baseDependencies({
+      environment: {
+        PATH: `/tmp/${"private-answer"}`,
+        DYLD_LIBRARY_PATH: "/tmp/hostile",
       },
-      {
-        makeTempDirectory: async () => "/tmp/kokoro-cli-audio-test",
-        spawn: (arguments_, options) => {
-          command = arguments_;
-          spawnOptions = options;
-          events.push("spawn");
-          return { exited, stderr: emptyStream() };
-        },
-        removeDirectory: async (path) => {
-          events.push(`remove:${path}`);
-        },
+      spawn: (receivedCommand, receivedOptions) => {
+        command = receivedCommand;
+        spawnOptions = receivedOptions;
+        return {
+          exited,
+          kill: () => resolveExit(143),
+          stdin: {
+            write: (bytes) => {
+              written.push(...bytes);
+              return bytes.byteLength;
+            },
+            flush: async () => {},
+            end: () => resolveExit(0),
+          },
+          stdout: closedStream(),
+          stderr: closedStream(),
+        };
       },
-    );
+    }));
 
-    await Bun.sleep(0);
     expect(command).toEqual([
-      "/usr/bin/afplay",
-      "/tmp/kokoro-cli-audio-test/speech.wav",
+      `${packRoot}/runtime/llm-now-kokoro-player`,
+      "--check",
     ]);
     expect(spawnOptions).toEqual({
-      stdin: "ignore",
-      stdout: "ignore",
+      cwd: packRoot,
+      env: {},
+      stdin: "pipe",
+      stdout: "pipe",
       stderr: "pipe",
+      windowsHide: true,
     });
-    expect(events).toEqual([
-      "save:/tmp/kokoro-cli-audio-test/speech.wav",
-      "spawn",
-    ]);
-
-    finishPlayback(0);
-    await playback;
-    expect(events.at(-1)).toBe("remove:/tmp/kokoro-cli-audio-test");
+    expect(written).toEqual(Array.from(audio.bytes));
+    expect(JSON.stringify(command)).not.toContain("private-answer");
   });
 
-  test("reports nonzero afplay status concisely and removes the temporary directory", async () => {
-    const removed: string[] = [];
+  test("handles bounded partial writes and backpressure before ending stdin", async () => {
+    const audio = canonicalWav(4);
+    const events: string[] = [];
+    let written = 0;
 
-    await expect(
-      playAudio(
-        { save: async () => {} },
-        {
-          makeTempDirectory: async () => "/tmp/kokoro-cli-audio-failure",
-          spawn: () => ({
-            exited: Promise.resolve(7),
-            stderr: new Blob(["no audio device\n    at afplay:1"]).stream(),
-          }),
-          removeDirectory: async (path) => {
-            removed.push(path);
+    await playAudio(audio, packRoot, signal, {}, baseDependencies({
+      spawn: () => {
+        let resolveExit: (code: number) => void = () => {};
+        const exited = new Promise<number>((resolve) => {
+          resolveExit = resolve;
+        });
+        return {
+          exited,
+          kill: () => resolveExit(143),
+          stdin: {
+            write: (bytes) => {
+              const accepted = Math.min(bytes.byteLength, 7);
+              written += accepted;
+              events.push(`write:${accepted}`);
+              return accepted;
+            },
+            flush: async () => events.push("flush"),
+            end: () => {
+              events.push("end");
+              resolveExit(0);
+            },
           },
-        },
-      ),
-    ).rejects.toThrow("Unable to play speech: afplay exited 7: no audio device");
+          stdout: closedStream(),
+          stderr: closedStream(),
+        };
+      },
+    }));
 
-    expect(removed).toEqual(["/tmp/kokoro-cli-audio-failure"]);
+    expect(written).toBe(audio.bytes.byteLength);
+    expect(events.filter((event) => event === "flush").length).toBeGreaterThan(1);
+    expect(events.at(-1)).toBe("end");
   });
 
-  test("reports a WAV-save failure concisely and removes the temporary directory", async () => {
-    const removed: string[] = [];
-
-    await expect(
-      playAudio(
-        {
-          save: async () => {
-            throw new Error("disk full\n    at internal-writer.ts:1");
-          },
-        },
-        {
-          makeTempDirectory: async () => "/tmp/kokoro-cli-audio-save-failure",
-          spawn: () => {
-            throw new Error("afplay must not start");
-          },
-          removeDirectory: async (path) => {
-            removed.push(path);
-          },
-        },
-      ),
-    ).rejects.toThrow("Unable to write temporary WAV: disk full");
-
-    expect(removed).toEqual(["/tmp/kokoro-cli-audio-save-failure"]);
+  test.each([
+    ["format", 20, 1],
+    ["sample rate", 24, 48_000],
+    ["declared data size", 40, 4],
+  ])("rejects malformed canonical WAV: %s", (_label, offset, value) => {
+    const audio = canonicalWav();
+    const view = new DataView(audio.bytes.buffer);
+    if (offset === 20) view.setUint16(offset, value, true);
+    else view.setUint32(offset, value, true);
+    expect(() => validateCanonicalWav(audio)).toThrow("player-wav-invalid");
   });
 
-  test("preserves the playback failure when temporary cleanup also fails", async () => {
-    await expect(
-      playAudio(
-        { save: async () => {} },
-        {
-          makeTempDirectory: async () => "/tmp/kokoro-cli-audio-double-failure",
-          spawn: () => ({
-            exited: Promise.resolve(7),
-            stderr: new Blob(["no audio device"]).stream(),
-          }),
-          removeDirectory: async () => {
-            throw new Error("permission denied\n    at cleanup.ts:1");
-          },
-        },
-      ),
-    ).rejects.toThrow(
-      "Unable to play speech: afplay exited 7: no audio device; Unable to remove temporary audio: permission denied",
+  test("rejects empty, inconsistent, and oversized audio before spawning", async () => {
+    expect(() => validateCanonicalWav({ bytes: new Uint8Array(44), sampleCount: 0 })).toThrow(
+      "player-wav-invalid",
     );
+    const inconsistent = canonicalWav();
+    inconsistent.sampleCount += 1;
+    expect(() => validateCanonicalWav(inconsistent)).toThrow("player-wav-invalid");
+    expect(() =>
+      validateCanonicalWav({
+        bytes: new Uint8Array(44),
+        sampleCount: 1_800_001,
+      }),
+    ).toThrow("player-wav-invalid");
+  });
+
+  test("rejects missing, linked, or non-executable players before spawn", async () => {
+    await expect(verifyBundledPlayer(packRoot, baseDependencies({
+      inspect: async (path) => {
+        if (path === packRoot || path === `${packRoot}/runtime`) {
+          return metadata("directory");
+        }
+        throw new Error("missing");
+      },
+    }))).rejects.toThrow("player-unavailable");
+
+    await expect(verifyBundledPlayer(packRoot, baseDependencies({
+      access: async () => {
+        throw new Error("not executable");
+      },
+    }))).rejects.toThrow("player-unavailable");
+
+    await expect(verifyBundledPlayer(packRoot, baseDependencies({
+      inspect: async (path) => ({
+        ...metadata(
+          path === packRoot || path === `${packRoot}/runtime`
+            ? "directory"
+            : "file",
+        ),
+        isSymbolicLink: () => path.endsWith("llm-now-kokoro-player"),
+      }),
+    }))).rejects.toThrow("player-unavailable");
+
+    await expect(verifyBundledPlayer(packRoot, baseDependencies({
+      inspect: async (path) => ({
+        ...metadata(
+          path === packRoot || path === `${packRoot}/runtime`
+            ? "directory"
+            : "file",
+        ),
+        isSymbolicLink: () => path === `${packRoot}/runtime`,
+      }),
+    }))).rejects.toThrow("player-unavailable");
+  });
+
+  test("reports start and device failures without exposing player output", async () => {
+    await expect(playAudio(canonicalWav(), packRoot, signal, {}, baseDependencies({
+      spawn: () => {
+        throw new Error("private answer from spawn");
+      },
+    }))).rejects.toThrow("player-start-failed");
+
+    await expect(playAudio(canonicalWav(), packRoot, signal, {}, baseDependencies({
+      spawn: () => ({
+        exited: Promise.resolve(7),
+        kill: () => {},
+        stdin: { write: (bytes) => bytes.byteLength, end: () => {} },
+        stdout: closedStream(),
+        stderr: closedStream(new TextEncoder().encode("private answer\n")),
+      }),
+    }))).rejects.toThrow("player-failed");
+  });
+
+  test("bounds both child output streams and rejects output on success", async () => {
+    for (const bytes of [
+      new Uint8Array([1]),
+      new Uint8Array(MAX_DIAGNOSTIC_BYTES + 1),
+    ]) {
+      await expect(playAudio(canonicalWav(), packRoot, signal, {}, baseDependencies({
+        delay: async () => {},
+        spawn: () => ({
+          exited: Promise.resolve(0),
+          kill: () => {},
+          stdin: { write: (input) => input.byteLength, end: () => {} },
+          stdout: closedStream(bytes),
+          stderr: closedStream(),
+        }),
+      }))).rejects.toThrow(
+        bytes.byteLength > MAX_DIAGNOSTIC_BYTES
+          ? "player-output-limit"
+          : "player-output-not-empty",
+      );
+    }
+  });
+
+  test("closes stdin, terminates, and reaps on cancellation", async () => {
+    const controller = new AbortController();
+    const signals: number[] = [];
+    const events: string[] = [];
+    let resolveExit: (code: number) => void = () => {};
+    const exited = new Promise<number>((resolve) => {
+      resolveExit = resolve;
+    });
+    const playback = playAudio(canonicalWav(), packRoot, controller.signal, {}, baseDependencies({
+      spawn: () => ({
+        exited,
+        kill: (receivedSignal) => {
+          signals.push(receivedSignal ?? 0);
+          events.push("kill");
+          resolveExit(143);
+        },
+        stdin: {
+          write: (bytes) => bytes.byteLength,
+          flush: () => new Promise(() => {}),
+          end: () => events.push("end"),
+        },
+        stdout: closedStream(),
+        stderr: closedStream(),
+      }),
+    }));
+    await Bun.sleep(0);
+    controller.abort(operationFailure("overall-timeout"));
+
+    await expect(playback).rejects.toThrow("overall-timeout");
+    expect(events.indexOf("end")).toBeLessThan(events.indexOf("kill"));
+    expect(signals).toContain(15);
+  });
+
+  test("observes cancellation while draining inherited child output handles", async () => {
+    const controller = new AbortController();
+    const playback = playAudio(
+      canonicalWav(),
+      packRoot,
+      controller.signal,
+      {},
+      baseDependencies({
+        spawn: () => ({
+          exited: Promise.resolve(0),
+          kill: () => {},
+          stdin: { write: (bytes) => bytes.byteLength, end: () => {} },
+          stdout: new ReadableStream<Uint8Array>(),
+          stderr: closedStream(),
+        }),
+      }),
+    );
+    await Bun.sleep(0);
+    controller.abort(operationFailure("overall-timeout"));
+
+    await expect(playback).rejects.toThrow("overall-timeout");
+  });
+
+  test("passes only validated local Linux audio endpoints", async () => {
+    let childEnvironment: Record<string, string> | undefined;
+    const environment = {
+      PATH: "/hostile",
+      ALSA_CONFIG_PATH: "/tmp/hostile",
+      XDG_RUNTIME_DIR: "/run/user/501",
+      PULSE_SERVER: "unix:/run/user/501/pulse/native",
+      PIPEWIRE_REMOTE: "pipewire-0",
+    };
+    await playAudio(canonicalWav(), packRoot, signal, {}, baseDependencies({
+      platform: "linux",
+      environment,
+      getUid: () => 501,
+      inspect: async (path) => {
+        if (
+          path === packRoot ||
+          path === `${packRoot}/runtime` ||
+          path === environment.XDG_RUNTIME_DIR
+        ) {
+          return metadata("directory");
+        }
+        if (path.includes("llm-now-kokoro-player")) return metadata("file");
+        return metadata("socket");
+      },
+      spawn: (_command, options) => {
+        childEnvironment = options.env;
+        return {
+          exited: Promise.resolve(0),
+          kill: () => {},
+          stdin: { write: (bytes) => bytes.byteLength, end: () => {} },
+          stdout: closedStream(),
+          stderr: closedStream(),
+        };
+      },
+    }));
+    expect(childEnvironment).toEqual({
+      LANG: "C.UTF-8",
+      XDG_RUNTIME_DIR: "/run/user/501",
+      PULSE_SERVER: "unix:/run/user/501/pulse/native",
+      PIPEWIRE_REMOTE: "pipewire-0",
+    });
+  });
+
+  test.each([
+    { XDG_RUNTIME_DIR: "relative", PULSE_SERVER: "tcp:remote:4713" },
+    { XDG_RUNTIME_DIR: "/run/user/501", PULSE_SERVER: "tcp:remote:4713" },
+    { XDG_RUNTIME_DIR: "/run/user/501", PIPEWIRE_REMOTE: "../remote" },
+    {
+      XDG_RUNTIME_DIR: "/run/user/501",
+      PULSE_SERVER: "unix:/run/user/502/pulse/native",
+    },
+  ])("rejects non-local Linux audio envelope %#", async (environment) => {
+    await expect(playAudio(canonicalWav(), packRoot, signal, {}, baseDependencies({
+      platform: "linux",
+      environment,
+      getUid: () => 501,
+      inspect: async (path) =>
+        path === packRoot ||
+        path === `${packRoot}/runtime` ||
+        path === "/run/user/501"
+          ? metadata("directory")
+          : path.includes("llm-now-kokoro-player")
+            ? metadata("file")
+            : metadata("socket"),
+      spawn: () => {
+        throw new Error("must not spawn");
+      },
+    }))).rejects.toThrow("player-environment-invalid");
+  });
+
+  test("rejects Linux socket paths whose intermediate links escape the runtime directory", async () => {
+    await expect(playAudio(canonicalWav(), packRoot, signal, {}, baseDependencies({
+      platform: "linux",
+      environment: {
+        XDG_RUNTIME_DIR: "/run/user/501",
+        PULSE_SERVER: "unix:/run/user/501/link/native",
+      },
+      getUid: () => 501,
+      canonicalize: async (path) =>
+        path.endsWith("/link/native") ? "/tmp/attacker/native" : path,
+      inspect: async (path) =>
+        path === packRoot ||
+        path === `${packRoot}/runtime` ||
+        path === "/run/user/501"
+          ? metadata("directory")
+          : path.includes("llm-now-kokoro-player")
+            ? metadata("file")
+            : metadata("socket"),
+      spawn: () => {
+        throw new Error("must not spawn");
+      },
+    }))).rejects.toThrow("player-environment-invalid");
+  });
+
+  test("rejects writable Linux runtime directories and foreign-owned sockets", async () => {
+    for (const unsafePath of ["runtime", "socket"] as const) {
+      await expect(playAudio(canonicalWav(), packRoot, signal, {}, baseDependencies({
+        platform: "linux",
+        environment: {
+          XDG_RUNTIME_DIR: "/run/user/501",
+          PULSE_SERVER: "unix:/run/user/501/pulse/native",
+        },
+        getUid: () => 501,
+        inspect: async (path) => {
+          if (path === "/run/user/501") {
+            return unsafePath === "runtime"
+              ? { ...metadata("directory"), mode: 0o722 }
+              : metadata("directory");
+          }
+          if (path.includes("llm-now-kokoro-player")) return metadata("file");
+          if (path === packRoot || path === `${packRoot}/runtime`) {
+            return metadata("directory");
+          }
+          return metadata("socket", unsafePath === "socket" ? 502 : 501);
+        },
+        spawn: () => {
+          throw new Error("must not spawn");
+        },
+      }))).rejects.toThrow("player-environment-invalid");
+    }
   });
 });

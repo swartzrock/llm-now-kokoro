@@ -48,6 +48,12 @@ function mockDependencies(options: {
     prepareRuntime: async (packRoot) => {
       events.push(["runtime", packRoot]);
     },
+    verifyPlayer: async (packRoot) => {
+      events.push(["player", packRoot]);
+    },
+    play: async (audio, packRoot, _signal, options) => {
+      events.push(["play", packRoot, audio.sampleCount, options?.checkOnly ?? false]);
+    },
     readVoice: async (path) => {
       events.push(["voice", path]);
       return new ArrayBuffer(4);
@@ -59,6 +65,10 @@ function mockDependencies(options: {
         phonemize: async (text: string, language: "a") => {
           events.push(["phonemize", text, language]);
           return "həlˈoʊ";
+        },
+        loadTokenizer: async (modelId) => {
+          events.push(["tokenizer", modelId]);
+          return model.tokenizer;
         },
         fromPretrained: async (modelId, modelOptions) => {
           events.push(["model", modelId, modelOptions]);
@@ -78,11 +88,12 @@ describe("native local-only speech engine", () => {
       dependencies,
     );
 
-    expect(events.slice(0, 4)).toEqual([
+    expect(events.slice(0, 5)).toEqual([
       ["verify", "/packs/with spaces/ユニコード"],
       ["runtime", "/packs/with spaces/ユニコード"],
+      ["player", "/packs/with spaces/ユニコード"],
       ["load"],
-      ["model", "model", { device: "cpu", dtype: "q8" }],
+      ["tokenizer", "model"],
     ]);
     expect(environment).toEqual({
       allowLocalModels: true,
@@ -119,6 +130,11 @@ describe("native local-only speech engine", () => {
       "infer",
       analysis.synthesisInput,
       { voice: "af_heart", speed: 1 },
+    ]);
+    expect(events).toContainEqual([
+      "model",
+      "model",
+      { device: "cpu", dtype: "q8" },
     ]);
   });
 
@@ -158,6 +174,7 @@ describe("native local-only speech engine", () => {
       "invalid-synthesis-input",
     );
     expect(events.some((event) => (event as unknown[])[0] === "infer")).toBe(false);
+    expect(events.some((event) => (event as unknown[])[0] === "model")).toBe(false);
   });
 
   test("rejects audio longer than 1,800,000 samples", async () => {
@@ -168,7 +185,7 @@ describe("native local-only speech engine", () => {
     const analysis = await engine.inspectText("long", signal);
 
     await expect(engine.synthesize(analysis, signal)).rejects.toThrow(
-      "invalid-audio-result",
+      "audio-sample-limit",
     );
   });
 
@@ -194,6 +211,7 @@ describe("native local-only speech engine", () => {
     expect(events).toEqual([
       ["verify", "/pack"],
       ["runtime", "/pack"],
+      ["player", "/pack"],
     ]);
   });
 
@@ -207,6 +225,18 @@ describe("native local-only speech engine", () => {
       "Native speech engine self test.",
       "a",
     ]);
+    expect(events.filter((event) => (event as unknown[])[0] === "infer")).toHaveLength(1);
+    expect(events).toContainEqual(["play", "/pack", 2, true]);
+  });
+
+  test("normal helper playback uses the same synthesized WAV without check mode", async () => {
+    const { dependencies, events } = mockDependencies();
+    const helper = createNativeHelperDependencies("/pack", dependencies);
+    const analysis = await helper.inspectText!("Hello", signal);
+    const audio = await helper.synthesize!(analysis, signal);
+    await helper.play!(audio, signal);
+
+    expect(events).toContainEqual(["play", "/pack", 2, false]);
     expect(events.filter((event) => (event as unknown[])[0] === "infer")).toHaveLength(1);
   });
 });

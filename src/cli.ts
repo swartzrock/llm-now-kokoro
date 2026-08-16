@@ -31,7 +31,17 @@ export interface SynthesizedAudio {
   sampleCount: number;
 }
 
+// Exceeds the supervised engine's worst-case graceful kill, hard kill,
+// output-drain, and reader-cancellation sequence while remaining bounded.
+const CANCELLATION_SETTLE_GRACE_MS = 5_000;
+
 export interface HelperDependencies {
+  cleanup?: () => Promise<void>;
+  deadlines?: {
+    inference?: number;
+    overall?: number;
+    phonemization?: number;
+  };
   readStdin?: (
     maximumBytes: number,
     signal: AbortSignal,
@@ -71,15 +81,27 @@ export async function runHelper(
   }
 
   await withDeadline(
-    OVERALL_TIMEOUT_MS,
+    dependencies.deadlines?.overall ?? OVERALL_TIMEOUT_MS,
     signal,
     operationFailure("overall-timeout"),
     async (overallSignal) => {
-      if (command.operation === "self-test") {
-        await (dependencies.selfTest ?? unavailableSelfTest)(overallSignal);
-        return;
+      let didFail = false;
+      try {
+        if (command.operation === "self-test") {
+          await (dependencies.selfTest ?? unavailableSelfTest)(overallSignal);
+          return;
+        }
+        await speak(dependencies, overallSignal);
+      } catch (error) {
+        didFail = true;
+        throw error;
+      } finally {
+        try {
+          await dependencies.cleanup?.();
+        } catch (cleanupError) {
+          if (!didFail) throw cleanupError;
+        }
       }
-      await speak(dependencies, overallSignal);
     },
   );
 }
@@ -102,10 +124,6 @@ export async function runHelperMain(
   }
 }
 
-// The executable entrypoint retains this source-level name while its argv
-// surface is the private helper protocol above, not the prototype CLI.
-export const runCliMain = runHelperMain;
-
 async function speak(
   dependencies: HelperDependencies,
   overallSignal: AbortSignal,
@@ -119,7 +137,7 @@ async function speak(
     throwIfAborted(overallSignal);
     const request = decodeSpeakRequest(requestBytes);
     const analysis = await withDeadline(
-      PHONEMIZATION_TIMEOUT_MS,
+      dependencies.deadlines?.phonemization ?? PHONEMIZATION_TIMEOUT_MS,
       overallSignal,
       operationFailure("phonemization-timeout"),
       (signal) => (dependencies.inspectText ?? unavailableInspect)(request.text, signal),
@@ -127,7 +145,7 @@ async function speak(
     validateAnalysis(analysis);
 
     const audio = await withDeadline(
-      INFERENCE_TIMEOUT_MS,
+      dependencies.deadlines?.inference ?? INFERENCE_TIMEOUT_MS,
       overallSignal,
       operationFailure("inference-timeout"),
       (signal) => (dependencies.synthesize ?? unavailableSynthesis)(analysis, signal),
@@ -172,7 +190,15 @@ async function readBoundedStdin(
   maximumBytes: number,
   signal: AbortSignal,
 ): Promise<Uint8Array> {
-  const reader = Bun.stdin.stream().getReader();
+  return readBoundedInput(Bun.stdin.stream(), maximumBytes, signal);
+}
+
+export async function readBoundedInput(
+  stream: ReadableStream<Uint8Array>,
+  maximumBytes: number,
+  signal: AbortSignal,
+): Promise<Uint8Array> {
+  const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   let byteLength = 0;
 
@@ -208,7 +234,7 @@ async function readBoundedStdin(
   }
 }
 
-async function withDeadline<T>(
+export async function withDeadline<T>(
   milliseconds: number,
   parentSignal: AbortSignal | undefined,
   timeoutFailure: HelperFailure,
@@ -222,12 +248,35 @@ async function withDeadline<T>(
   const onParentAbort = () => controller.abort(abortReason(parentSignal!));
   parentSignal?.addEventListener("abort", onParentAbort, { once: true });
   const timeout = setTimeout(() => controller.abort(timeoutFailure), milliseconds);
+  const taskPromise = Promise.resolve().then(() => task(controller.signal));
 
   try {
-    return await withAbort(task(controller.signal), controller.signal);
+    return await withAbort(taskPromise, controller.signal);
+  } catch (error) {
+    if (controller.signal.aborted) {
+      await settleWithin(taskPromise, CANCELLATION_SETTLE_GRACE_MS);
+    }
+    throw error;
   } finally {
     clearTimeout(timeout);
     parentSignal?.removeEventListener("abort", onParentAbort);
+  }
+}
+
+async function settleWithin(
+  promise: Promise<unknown>,
+  milliseconds: number,
+): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      promise.then(() => undefined, () => undefined),
+      new Promise<void>((resolvePromise) => {
+        timeout = setTimeout(resolvePromise, milliseconds);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
   }
 }
 

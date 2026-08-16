@@ -23,7 +23,6 @@ export type HelperOperation = "info" | "self-test" | "speak";
 
 export interface HelperCommand {
   operation: HelperOperation;
-  requiredCapabilities: ProtocolCapability[];
 }
 
 export interface SpeakRequest {
@@ -50,7 +49,6 @@ export function parseHelperArguments(arguments_: string[]): HelperCommand {
     throw protocolFailure("protocol-major-mismatch");
   }
 
-  const requiredCapabilities: ProtocolCapability[] = [];
   const seen = new Set<string>();
   for (let index = 3; index < arguments_.length; index += 2) {
     const flag = arguments_[index];
@@ -65,10 +63,9 @@ export function parseHelperArguments(arguments_: string[]): HelperCommand {
       throw protocolFailure("protocol-usage");
     }
     seen.add(capability);
-    requiredCapabilities.push(capability as ProtocolCapability);
   }
 
-  return { operation, requiredCapabilities };
+  return { operation };
 }
 
 export function decodeSpeakRequest(bytes: Uint8Array): SpeakRequest {
