@@ -194,7 +194,7 @@ export async function playAudio(
     if (writerResult !== "settled" && exitCode === 0) {
       throw operationFailure("player-input-failed");
     }
-    if (exitCode !== 0) throw operationFailure("player-failed");
+    if (exitCode !== 0) throw operationFailure(playerFailure(exitCode));
     if (stdoutBytes !== 0 || stderrBytes !== 0) {
       throw operationFailure("player-output-not-empty");
     }
@@ -203,6 +203,21 @@ export async function playAudio(
     throw error;
   } finally {
     if (abortListener) signal.removeEventListener("abort", abortListener);
+  }
+}
+
+function playerFailure(exitCode: number): string {
+  switch (exitCode) {
+    case 3:
+      return "player-input-failed";
+    case 4:
+      return "player-wav-invalid";
+    case 5:
+      return "player-decoder-failed";
+    case 6:
+      return "player-decoder-length-invalid";
+    default:
+      return "player-failed";
   }
 }
 

@@ -249,6 +249,23 @@ describe("bundled playback", () => {
     }))).rejects.toThrow("player-failed");
   });
 
+  test.each([
+    [3, "player-input-failed"],
+    [4, "player-wav-invalid"],
+    [5, "player-decoder-failed"],
+    [6, "player-decoder-length-invalid"],
+  ] as const)("maps player stage exit %i to %s", async (exitCode, diagnostic) => {
+    await expect(playAudio(canonicalWav(), packRoot, signal, {}, baseDependencies({
+      spawn: () => ({
+        exited: Promise.resolve(exitCode),
+        kill: () => {},
+        stdin: { write: (bytes) => bytes.byteLength, end: () => {} },
+        stdout: closedStream(),
+        stderr: closedStream(new TextEncoder().encode("value-free stage\n")),
+      }),
+    }))).rejects.toThrow(diagnostic);
+  });
+
   test("bounds both child output streams and rejects output on success", async () => {
     for (const bytes of [
       new Uint8Array([1]),

@@ -17,10 +17,16 @@
 #define MAX_WAV_BYTES (7200000u + WAV_HEADER_BYTES)
 #define MAX_AUDIO_FRAMES 1800000u
 
-static int fail(const char *message) {
+#define PLAYER_EXIT_INVALID_OPERATION 2
+#define PLAYER_EXIT_STDIN 3
+#define PLAYER_EXIT_WAV 4
+#define PLAYER_EXIT_DECODER_INIT 5
+#define PLAYER_EXIT_DECODER_LENGTH 6
+
+static int fail(int exit_code, const char *message) {
     fputs(message, stderr);
     fputc('\n', stderr);
-    return 1;
+    return exit_code;
 }
 
 static void secure_zero(void *memory, size_t length) {
@@ -83,9 +89,9 @@ static int initialize_decoder(
 ) {
     ma_uint64 frames = 0;
     ma_decoder_config config = ma_decoder_config_init(ma_format_f32, 1u, 24000u);
-    if (!is_canonical_wav(bytes, length)) return 0;
+    if (!is_canonical_wav(bytes, length)) return PLAYER_EXIT_WAV;
     if (ma_decoder_init_memory(bytes, length, &config, decoder) != MA_SUCCESS) {
-        return 0;
+        return PLAYER_EXIT_DECODER_INIT;
     }
     if (
         ma_decoder_get_length_in_pcm_frames(decoder, &frames) != MA_SUCCESS ||
@@ -94,16 +100,16 @@ static int initialize_decoder(
         frames * 4u != length - WAV_HEADER_BYTES
     ) {
         ma_decoder_uninit(decoder);
-        return 0;
+        return PLAYER_EXIT_DECODER_LENGTH;
     }
-    return 1;
+    return 0;
 }
 
 static int play_decoder(ma_decoder *decoder) {
     ma_engine engine;
     ma_sound sound;
     if (ma_engine_init(NULL, &engine) != MA_SUCCESS) {
-        return fail("audio device unavailable");
+        return fail(1, "audio device unavailable");
     }
     if (
         ma_sound_init_from_data_source(
@@ -115,12 +121,12 @@ static int play_decoder(ma_decoder *decoder) {
         ) != MA_SUCCESS
     ) {
         ma_engine_uninit(&engine);
-        return fail("audio stream unavailable");
+        return fail(1, "audio stream unavailable");
     }
     if (ma_sound_start(&sound) != MA_SUCCESS) {
         ma_sound_uninit(&sound);
         ma_engine_uninit(&engine);
-        return fail("audio playback failed");
+        return fail(1, "audio playback failed");
     }
     while (!ma_sound_at_end(&sound)) ma_sleep(5u);
     ma_sound_uninit(&sound);
@@ -136,19 +142,26 @@ int main(int argc, char **argv) {
     int check_only = argc == 2 && strcmp(argv[1], "--check") == 0;
 
 #if defined(_WIN32)
-    if (_setmode(_fileno(stdin), _O_BINARY) == -1) return fail("stdin unavailable");
+    if (_setmode(_fileno(stdin), _O_BINARY) == -1) {
+        return fail(PLAYER_EXIT_STDIN, "stdin unavailable");
+    }
 #else
     {
         struct rlimit core_limit = {0u, 0u};
         (void)setrlimit(RLIMIT_CORE, &core_limit);
     }
 #endif
-    if (argc > 2 || (argc == 2 && !check_only)) return fail("invalid player operation");
-    if (!read_stdin(&bytes, &length)) return fail("invalid or oversized WAV");
-    if (!initialize_decoder(bytes, length, &decoder)) {
+    if (argc > 2 || (argc == 2 && !check_only)) {
+        return fail(PLAYER_EXIT_INVALID_OPERATION, "invalid player operation");
+    }
+    if (!read_stdin(&bytes, &length)) {
+        return fail(PLAYER_EXIT_STDIN, "invalid or oversized WAV");
+    }
+    result = initialize_decoder(bytes, length, &decoder);
+    if (result != 0) {
         secure_zero(bytes, length);
         free(bytes);
-        return fail("invalid or oversized WAV");
+        return fail(result, "invalid or oversized WAV");
     }
 
     result = check_only ? 0 : play_decoder(&decoder);
