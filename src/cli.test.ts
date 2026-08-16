@@ -43,8 +43,12 @@ function dependenciesFor(
     selfTest: async () => {
       events.push("self-test");
     },
-    writeStdout: (value) => output.stdout.push(value),
-    writeStderr: (value) => output.stderr.push(value),
+    writeStdout: (value) => {
+      output.stdout.push(value);
+    },
+    writeStderr: (value) => {
+      output.stderr.push(value);
+    },
   };
 }
 
@@ -54,11 +58,29 @@ describe("internal helper operations", () => {
   test("info emits only its bounded canonical response", async () => {
     const events: string[] = [];
     const output = { stdout: [] as string[], stderr: [] as string[] };
+    let finishWrite: () => void = () => {};
+    const writeFinished = new Promise<void>((resolve) => {
+      finishWrite = resolve;
+    });
+    const dependencies = dependenciesFor("unused", events, output);
+    dependencies.writeStdout = async (value) => {
+      await writeFinished;
+      output.stdout.push(value);
+    };
 
-    const exitCode = await runHelperMain(
+    const result = runHelperMain(
       ["info", "--protocol-major", "1"],
-      dependenciesFor("unused", events, output),
+      dependencies,
     );
+    let runFinished = false;
+    void result.then(() => {
+      runFinished = true;
+    });
+    await Bun.sleep(0);
+    expect(runFinished).toBe(false);
+    expect(output.stdout).toEqual([]);
+    finishWrite();
+    const exitCode = await result;
 
     expect(exitCode).toBe(0);
     expect(output.stdout).toHaveLength(1);

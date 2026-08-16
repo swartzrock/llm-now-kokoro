@@ -11,6 +11,9 @@ await runOfflineInferenceSmoke(ARCHITECTURE_INSTALL_ROOT);
 
 const playerMode = process.argv.includes("--play") ? "play" : "check";
 const info = await invokeHelper(["info", "--protocol-major", "1"]);
+if (info.stdout === "") {
+  throw new Error("Architecture helper returned empty info");
+}
 const parsedInfo = JSON.parse(info.stdout) as {
   engine?: {
     inference?: string;
@@ -74,7 +77,11 @@ async function invokeHelper(
     readBounded(child.stderr),
   ]);
   if (exitCode !== 0) {
-    throw new Error(`Architecture helper failed with exit ${exitCode}`);
+    const diagnostic = stderr.trim();
+    throw new Error(
+      `Architecture helper failed with exit ${exitCode}` +
+        (diagnostic ? ` (${diagnostic})` : ""),
+    );
   }
   return { stdout, stderr };
 }

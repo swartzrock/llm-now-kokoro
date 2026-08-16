@@ -58,8 +58,8 @@ export interface HelperDependencies {
   preflight?: (signal: AbortSignal) => Promise<void>;
   selfTest?: (signal: AbortSignal) => Promise<void>;
   signal?: AbortSignal;
-  writeStdout?: (value: string) => void;
-  writeStderr?: (value: string) => void;
+  writeStdout?: (value: string) => void | Promise<void>;
+  writeStderr?: (value: string) => void | Promise<void>;
 }
 
 export async function runHelper(
@@ -73,9 +73,11 @@ export async function runHelper(
   }
 
   if (command.operation === "info") {
-    writeBounded(
+    await writeBounded(
       encodeInfoResponse(),
-      dependencies.writeStdout ?? ((value) => process.stdout.write(value)),
+      dependencies.writeStdout ?? (async (value) => {
+        await Bun.stdout.write(value);
+      }),
     );
     return;
   }
@@ -116,9 +118,11 @@ export async function runHelperMain(
   } catch (error) {
     const failure = normalizeFailure(error);
     const diagnostic = `llm-now-kokoro: ${failure.diagnostic}\n`;
-    writeBounded(
+    await writeBounded(
       diagnostic,
-      dependencies.writeStderr ?? ((value) => process.stderr.write(value)),
+      dependencies.writeStderr ?? (async (value) => {
+        await Bun.stderr.write(value);
+      }),
     );
     return failure.exitCode;
   }
@@ -312,11 +316,14 @@ function throwIfAborted(signal: AbortSignal): void {
   }
 }
 
-function writeBounded(value: string, write: (value: string) => void): void {
+async function writeBounded(
+  value: string,
+  write: (value: string) => void | Promise<void>,
+): Promise<void> {
   if (new TextEncoder().encode(value).byteLength > MAX_DIAGNOSTIC_BYTES) {
     throw operationFailure("output-limit");
   }
-  write(value);
+  await write(value);
 }
 
 async function unavailableSelfTest(): Promise<never> {
