@@ -1,0 +1,1 @@
+{"helperVersion":"0.1.0","protocolMajor":1,"capabilities":["stdin-json-v1","silent-self-test","native-onnx-cpu","local-q8","voice-af-heart","speed-1.0","bundled-player-stdin"],"engine":{"inference":"onnxruntime-node-cpu","model":"q8","voice":"af_heart","speed":1}}

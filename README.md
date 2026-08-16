@@ -1,119 +1,47 @@
-# kokoro-cli
+# llm-now-kokoro
 
-`kokoro-cli` speaks one quoted text argument through the macOS default audio
-output. It uses the q8 CPU build of
-`onnx-community/Kokoro-82M-v1.0-ONNX`, voice `af_heart` by default, and speed
-`1.0`. It uses `onnxruntime-node` by default, then waits for `/usr/bin/afplay`
-to finish before exiting.
+`llm-now-kokoro` builds the optional Kokoro speech pack used internally by
+`llm-now`. It is not a second user-facing CLI, is not installed on `PATH`, and
+does not download or update models at runtime.
 
-This version supports only Apple silicon (`arm64`) macOS on the current build
-host. It is not a universal or cross-platform binary. The interface supports
-only `--voice`, `--wasm`, and `--help`; it has no stdin or output-file mode.
+The v1 helper is deliberately fixed to native ONNX Runtime CPU inference, the
+q8 `onnx-community/Kokoro-82M-v1.0-ONNX` model, voice `af_heart`, and speed
+`1.0`. ONNX inference through WebAssembly, other voices or controls, GPU use,
+streaming synthesis, a daemon, installers, and a public standalone command are
+outside this repository phase.
 
-## Run from source
+## Internal protocol
 
-Install exactly [Bun 1.3.14](https://bun.sh), then install dependencies and pass
-the text as one shell argument:
+The helper exposes only the versioned `info`, silent `self-test`, and `speak`
+operations. Protocol controls are fixed argv fields. `speak` reads one bounded
+UTF-8 JSON object from stdin; answer text is forbidden from argv, environment
+variables, filenames, diagnostics, and the info response. Successful
+`self-test` and `speak` produce no output.
 
-```bash
-bun install
-bun index.ts "How was your day?"
-bun index.ts --voice af_bella "How was your day?"
-bun index.ts --voice ff_siwis "I am Siwis. Listen carefully."
-bun index.ts --voice jf_alpha "I am Alpha. Listen carefully."
-bun index.ts --wasm "Run this with WebAssembly."
-bun index.ts --help
-```
+The normative machine-readable contract and golden fixtures are under
+[`protocol/v1`](protocol/v1). `llm-now` will be the only supported caller and
+must require protocol major `1` plus every capability it depends on.
 
-The quotes keep a multiword utterance in one argument. Missing text, whitespace-only
-text, an unknown voice, or additional arguments fail before the model loads.
-`--voice <voice>` may appear before or after the text. The default is `af_heart`;
-run `--help` for examples. All 54 voice files shipped by `kokoro-js` 1.2.1 are
-accepted and embedded. Every voice uses English phonemization: `b*` voices use
-British English and the others use American English. Pronunciation and timbre
-quality may vary for voices designed for other languages.
+## Development
 
-Pass `--wasm` before or after the text to use `onnxruntime-web`'s WebAssembly
-backend instead of the default native runtime. Source and compiled invocations
-use the same model cache and voices.
-
-## Build and run the executable
-
-Build on the Apple silicon Mac where the executable will run:
+Use exactly Bun 1.3.14:
 
 ```bash
-bun run build
-./dist/kokoro-cli "How was your day?"
-./dist/kokoro-cli --voice bf_emma "How was your day?"
-./dist/kokoro-cli --voice ff_siwis "Listen carefully."
-./dist/kokoro-cli --voice jf_alpha "Listen carefully."
-./dist/kokoro-cli --wasm "Run this with WebAssembly."
-./dist/kokoro-cli --help
-```
-
-The build produces:
-
-- `dist/kokoro-cli`: the standalone current-host executable.
-- `dist/embedded-voices.manifest.json`: a build-audit manifest; the executable
-  does not need this file at runtime.
-
-The executable embeds the CLI and Kokoro code, all 54 voice `.bin` files from
-the pinned `kokoro-js` package, the Apple silicon ONNX host native runtime, and
-the ONNX WebAssembly runtime. It runs without Bun, project `node_modules`, a
-separate ONNX Runtime installation, or persistent runtime sidecars. The q8 model
-weights are downloaded and cached; they are not embedded in the binary.
-
-## First run and model cache
-
-The first valid invocation reports model loading and genuinely missing downloads
-on stderr while it populates:
-
-```text
-~/Library/Caches/kokoro-cli/transformers
-```
-
-In a fresh cold-cache measurement on 2026-08-08, the four cached artifacts—the
-q8 ONNX model plus its config and tokenizer JSON files—used approximately 96 MiB
-on disk. Treat this as a dated estimate because upstream artifacts and filesystem
-allocation can change.
-
-Later runs reuse the complete cache instead of downloading the same artifacts,
-and a warmed cache supports offline reuse. They still report model loading, but
-do not label cache reads as downloads. If the cache becomes incomplete or
-corrupt, quit the CLI and delete only
-`~/Library/Caches/kokoro-cli/transformers` (for example, with Finder's **Go to
-Folder**). The next invocation recreates that directory and downloads the model
-artifacts again.
-
-## Verification
-
-Run the focused gates with Bun 1.3.14:
-
-```bash
+ONNXRUNTIME_NODE_INSTALL_CUDA=skip bun install --frozen-lockfile
+bun test src/protocol.test.ts src/cli.test.ts src/compliance.test.ts
 bun run typecheck
-bun run test
-bun run smoke:model-cache
-bun run build
-bun run smoke:standalone
+bun run smoke:architecture
 ```
 
-`bun run test` is the default offline suite. `smoke:model-cache` is the opt-in
-network check for cold q8 download and warm offline reuse. After a build,
-`smoke:standalone` checks the executable in a clean temporary directory, including
-embedded voices, cold and warm native inference, warm WebAssembly inference,
-native-library paths, playback, and the absence of persistent sidecars.
+The architecture smoke is test scaffolding for a fixed, non-user phrase. It
+does not establish a general CLI surface. Model preparation may use the network
+only in build or CI setup; the installed helper never may.
 
-Finally, run both playback paths in a normal logged-in Mac audio session:
+## Release status
 
-```bash
-bun index.ts "Source playback check."
-bun index.ts --voice af_bella "Selected source voice check."
-./dist/kokoro-cli --voice bf_emma "Compiled playback check."
-```
-
-The automated/focused behavior checks, q8 cold and warm synthesis, compiled
-asset checks, native-path isolation, and sidecar cleanup passed on 2026-08-08.
-`/usr/bin/afplay` was invoked and awaited, but the verification host returned
-`AudioQueueStart failed (-1)` even outside the sandbox. That is an audible-check
-gap on the execution host, not skipped playback; confirm the two commands above
-on a Mac with an active audio session.
+No release is authorized from Phase 1. The code is GPL-3.0-or-later while the
+eSpeak-derived phonemizer remains in the payload. Redistribution review,
+corresponding-source/relink materials, five-target runtime inventories,
+macOS signing/notarization, Windows signing/runtime redistribution, and the
+remaining gates in [`docs/RELEASING.md`](docs/RELEASING.md) must be complete
+before publication.

@@ -1,289 +1,241 @@
 import { describe, expect, test } from "bun:test";
 
 import {
-  DEFAULT_VOICE,
-  HELP_TEXT,
-  parseCliArguments,
-  runCli,
-  runCliMain,
-  SUPPORTED_VOICES,
-  type CliDependencies,
+  type HelperDependencies,
+  type SpeechAnalysis,
+  runHelperMain,
 } from "./cli";
+import {
+  MAX_AUDIO_SAMPLES,
+  MAX_DIAGNOSTIC_BYTES,
+  MAX_NON_SPECIAL_TOKENS,
+} from "./limits";
 
-function unusedDependencies(events: string[]): CliDependencies {
+const encoder = new TextEncoder();
+
+function request(text: string): Uint8Array {
+  return encoder.encode(JSON.stringify({ text }));
+}
+
+function dependenciesFor(
+  text: string,
+  events: string[],
+  output: { stdout: string[]; stderr: string[] },
+): HelperDependencies {
   return {
-    installVoiceProvider: () => {
-      events.push("install-voice-provider");
-      return () => events.push("restore-voice-provider");
+    readStdin: async () => request(text),
+    inspectText: async (receivedText) => {
+      events.push(`inspect:${receivedText}`);
+      return { nonSpecialTokenCount: 3, synthesisInput: "opaque" };
     },
-    prepareRuntime: async (backend) => {
-      events.push(`prepare-runtime:${backend}`);
-      return {
-        cleanup: async () => {
-          events.push("cleanup-runtime");
-        },
-      };
+    synthesize: async (analysis) => {
+      events.push(`synthesize:${analysis.synthesisInput as string}`);
+      return { bytes: new Uint8Array([1, 2, 3]), sampleCount: 3 };
     },
-    synthesize: async (_text, _voice, backend) => {
-      events.push(`synthesize:${backend}`);
-      return { save: async () => {} };
+    play: async (audio) => {
+      events.push(`play:${audio.sampleCount}`);
     },
-    play: async () => {
-      events.push("play");
+    selfTest: async () => {
+      events.push("self-test");
     },
-    getEnvironment: () => {
-      events.push("get-environment");
-      return undefined;
-    },
+    writeStdout: (value) => output.stdout.push(value),
+    writeStderr: (value) => output.stderr.push(value),
   };
 }
 
-describe("parseCliArguments", () => {
-  test("preserves one non-whitespace argument with the default voice", () => {
-    expect(parseCliArguments(["  How was your day?  "])).toEqual({
-      kind: "speak",
-      text: "  How was your day?  ",
-      voice: DEFAULT_VOICE,
-      backend: "native",
-    });
-  });
+const speakArguments = ["speak", "--protocol-major", "1"];
 
-  test("accepts an embedded voice before or after the text", () => {
-    expect(parseCliArguments(["--voice", "af_bella", "Hello"])).toEqual({
-      kind: "speak",
-      text: "Hello",
-      voice: "af_bella",
-      backend: "native",
-    });
-    expect(parseCliArguments(["Hello", "--voice", "bf_emma"])).toEqual({
-      kind: "speak",
-      text: "Hello",
-      voice: "bf_emma",
-      backend: "native",
-    });
-    for (const voice of [
-      "ef_dora",
-      "ff_siwis",
-      "jf_alpha",
-      "zf_xiaobei",
-    ] as const) {
-      expect(parseCliArguments(["--voice", voice, "Hello"])).toEqual({
-        kind: "speak",
-        text: "Hello",
-        voice,
-        backend: "native",
-      });
-    }
-  });
-
-  test("accepts --wasm before or after the text", () => {
-    expect(parseCliArguments(["--wasm", "Hello"])).toEqual({
-      kind: "speak",
-      text: "Hello",
-      voice: DEFAULT_VOICE,
-      backend: "wasm",
-    });
-    expect(parseCliArguments(["Hello", "--wasm"])).toEqual({
-      kind: "speak",
-      text: "Hello",
-      voice: DEFAULT_VOICE,
-      backend: "wasm",
-    });
-  });
-
-  test("returns the help command", () => {
-    expect(parseCliArguments(["--help"])).toEqual({ kind: "help" });
-    expect(SUPPORTED_VOICES).toHaveLength(54);
-  });
-
-  test.each([
-    [[], 'Usage: kokoro-cli [--voice <voice>] [--wasm] "text to speak"'],
-    [["   \t\n"], "Text must contain non-whitespace characters."],
-    [["hello", "world"], 'Usage: kokoro-cli [--voice <voice>] [--wasm] "text to speak"'],
-    [["--voice", "not_a_voice", "Hello"], "Unknown voice: not_a_voice"],
-    [["--voice", "Hello"], "--voice requires a voice name and one text argument."],
-    [["--wasm", "--wasm", "Hello"], "--wasm may only be specified once."],
-    [["--unknown", "Hello"], "Unknown option: --unknown"],
-  ])("rejects invalid arguments", (arguments_, message) => {
-    expect(() => parseCliArguments(arguments_)).toThrow(message);
-  });
-});
-
-describe("runCli", () => {
-  test.each([
-    [],
-    ["   \t\n"],
-    ["hello", "world"],
-    ["--voice", "not_a_voice", "Hello"],
-  ])(
-    "rejects invalid arguments before any runtime dependency",
-    async (...arguments_) => {
-      const events: string[] = [];
-
-      await expect(runCli(arguments_, unusedDependencies(events))).rejects.toThrow();
-
-      expect(events).toEqual([]);
-    },
-  );
-
-  test("prints help without preparing voices, native assets, or the model", async () => {
+describe("internal helper operations", () => {
+  test("info emits only its bounded canonical response", async () => {
     const events: string[] = [];
-    const output: string[] = [];
-    const dependencies = unusedDependencies(events);
-    dependencies.writeOutput = (message) => output.push(message);
+    const output = { stdout: [] as string[], stderr: [] as string[] };
 
-    await expect(runCli(["--help"], dependencies)).resolves.toBeUndefined();
+    const exitCode = await runHelperMain(
+      ["info", "--protocol-major", "1"],
+      dependenciesFor("unused", events, output),
+    );
 
-    expect(output).toEqual([HELP_TEXT]);
+    expect(exitCode).toBe(0);
+    expect(output.stdout).toHaveLength(1);
+    expect(output.stdout[0]).toStartWith('{"helperVersion":');
+    expect(encoder.encode(output.stdout[0]!).byteLength).toBeLessThanOrEqual(
+      MAX_DIAGNOSTIC_BYTES,
+    );
+    expect(output.stderr).toEqual([]);
     expect(events).toEqual([]);
   });
 
-  test("passes the exact text through synthesis and cleans runtime state after playback", async () => {
+  test("self-test is silent on success", async () => {
     const events: string[] = [];
-    const audio = { save: async () => {} };
-    const dependencies = unusedDependencies(events);
-    dependencies.synthesize = async (text, voice, backend) => {
-      events.push(`synthesize:${backend}:${voice}:${text}`);
-      return audio;
-    };
-    dependencies.play = async (receivedAudio) => {
-      expect(receivedAudio).toBe(audio);
-      events.push("play");
-    };
+    const output = { stdout: [] as string[], stderr: [] as string[] };
 
-    await expect(
-      runCli(["  How was your day?  "], dependencies),
-    ).resolves.toBeUndefined();
-
-    expect(events).toEqual([
-      "get-environment",
-      "install-voice-provider",
-      "prepare-runtime:native",
-      "synthesize:native:af_heart:  How was your day?  ",
-      "play",
-      "cleanup-runtime",
-      "restore-voice-provider",
-    ]);
-  });
-
-  test("passes the selected embedded voice to synthesis", async () => {
-    const events: string[] = [];
-    const dependencies = unusedDependencies(events);
-    dependencies.synthesize = async (text, voice, backend) => {
-      events.push(`synthesize:${backend}:${voice}:${text}`);
-      return { save: async () => {} };
-    };
-
-    await runCli(["--voice", "jf_alpha", "Hello"], dependencies);
-
-    expect(events).toContain("synthesize:native:jf_alpha:Hello");
-  });
-
-  test("passes the WASM backend through runtime preparation and synthesis", async () => {
-    const events: string[] = [];
-    const dependencies = unusedDependencies(events);
-
-    await runCli(["--wasm", "Hello"], dependencies);
-
-    expect(events).toContain("prepare-runtime:wasm");
-    expect(events).toContain("synthesize:wasm");
-  });
-
-  test("cleans native and voice state after synthesis fails", async () => {
-    const events: string[] = [];
-    const dependencies = unusedDependencies(events);
-    dependencies.synthesize = async () => {
-      events.push("synthesize");
-      throw new Error("Unable to synthesize speech: inference failed");
-    };
-
-    await expect(runCli(["Hello"], dependencies)).rejects.toThrow(
-      "Unable to synthesize speech: inference failed",
+    const exitCode = await runHelperMain(
+      ["self-test", "--protocol-major", "1"],
+      dependenciesFor("unused", events, output),
     );
 
-    expect(events).toEqual([
-      "get-environment",
-      "install-voice-provider",
-      "prepare-runtime:native",
-      "synthesize",
-      "cleanup-runtime",
-      "restore-voice-provider",
-    ]);
+    expect(exitCode).toBe(0);
+    expect(output).toEqual({ stdout: [], stderr: [] });
+    expect(events).toEqual(["self-test"]);
   });
 
-  test("preserves synthesis and runtime cleanup failures", async () => {
+  test("speak passes exact stdin text through the private seams", async () => {
+    const text = '"hello"\nGrüße 😀; $(touch nope) | & < >';
     const events: string[] = [];
-    const dependencies = unusedDependencies(events);
+    const output = { stdout: [] as string[], stderr: [] as string[] };
+
+    const exitCode = await runHelperMain(
+      speakArguments,
+      dependenciesFor(text, events, output),
+    );
+
+    expect(exitCode).toBe(0);
+    expect(speakArguments.join(" ")).not.toContain(text);
+    expect(events).toEqual([
+      `inspect:${text}`,
+      "synthesize:opaque",
+      "play:3",
+    ]);
+    expect(output).toEqual({ stdout: [], stderr: [] });
+  });
+
+  test.each([
+    [encoder.encode("{"), "malformed-request"],
+    [encoder.encode('{"text":" \\n"}'), "blank-text"],
+    [encoder.encode('{"text":"a\\u0000b"}'), "nul-text"],
+    [request("x".repeat(501)), "text-too-long"],
+  ])(
+    "rejects bad stdin before phonemization, ONNX, or playback",
+    async (bytes, diagnostic) => {
+      const events: string[] = [];
+      const output = { stdout: [] as string[], stderr: [] as string[] };
+      const dependencies = dependenciesFor("unused", events, output);
+      dependencies.readStdin = async () => bytes;
+
+      const exitCode = await runHelperMain(speakArguments, dependencies);
+
+      expect(exitCode).toBe(2);
+      expect(events).toEqual([]);
+      expect(output.stdout).toEqual([]);
+      expect(output.stderr.join("")).toContain(diagnostic);
+    },
+  );
+
+  test("rejects expansion beyond 509 tokens before ONNX or playback", async () => {
+    const events: string[] = [];
+    const output = { stdout: [] as string[], stderr: [] as string[] };
+    const dependencies = dependenciesFor("abbreviation-heavy", events, output);
+    dependencies.inspectText = async () => {
+      events.push("inspect");
+      return {
+        nonSpecialTokenCount: MAX_NON_SPECIAL_TOKENS + 1,
+        synthesisInput: "opaque",
+      };
+    };
+
+    const exitCode = await runHelperMain(speakArguments, dependencies);
+
+    expect(exitCode).toBe(2);
+    expect(events).toEqual(["inspect"]);
+    expect(output.stderr.join("")).toContain("phoneme-token-limit");
+  });
+
+  test("rejects audio over 75 seconds before playback", async () => {
+    const events: string[] = [];
+    const output = { stdout: [] as string[], stderr: [] as string[] };
+    const dependencies = dependenciesFor("long audio", events, output);
+    dependencies.synthesize = async (_analysis: SpeechAnalysis) => {
+      events.push("synthesize");
+      return {
+        bytes: new Uint8Array(),
+        sampleCount: MAX_AUDIO_SAMPLES + 1,
+      };
+    };
+
+    const exitCode = await runHelperMain(speakArguments, dependencies);
+
+    expect(exitCode).toBe(2);
+    expect(events).toEqual(["inspect:long audio", "synthesize"]);
+    expect(output.stderr.join("")).toContain("audio-sample-limit");
+  });
+
+  test("redacts answer text and raw dependency diagnostics", async () => {
+    const sensitive = "private answer $(with shell syntax)";
+    const events: string[] = [];
+    const output = { stdout: [] as string[], stderr: [] as string[] };
+    const dependencies = dependenciesFor(sensitive, events, output);
     dependencies.synthesize = async () => {
-      throw new Error("inference failed");
+      throw new Error(`model rejected ${sensitive}${"x".repeat(40_000)}`);
     };
-    dependencies.prepareRuntime = async () => ({
-      cleanup: async () => {
-        events.push("cleanup-runtime");
-        throw new Error("runtime cleanup failed");
-      },
-    });
 
-    let error: unknown;
-    try {
-      await runCli(["Hello"], dependencies);
-    } catch (caught) {
-      error = caught;
-    }
+    const exitCode = await runHelperMain(speakArguments, dependencies);
+    const diagnostic = output.stderr.join("");
 
-    expect(error).toBeInstanceOf(AggregateError);
-    expect((error as AggregateError).errors).toEqual([
-      new Error("inference failed"),
-      new Error("runtime cleanup failed"),
-    ]);
-    expect(events.at(-1)).toBe("restore-voice-provider");
+    expect(exitCode).toBe(1);
+    expect(diagnostic).toBe("llm-now-kokoro: operation-failed\n");
+    expect(diagnostic).not.toContain(sensitive);
+    expect(encoder.encode(diagnostic).byteLength).toBeLessThanOrEqual(
+      MAX_DIAGNOSTIC_BYTES,
+    );
+    expect(events).not.toContain("play:3");
   });
 
-  test("uses an environment-only embedded voice self-check without loading the model", async () => {
+  test("returns 130 for cancellation without starting work", async () => {
     const events: string[] = [];
-    let selfCheck: unknown;
-    const dependencies = unusedDependencies(events);
-    dependencies.getEnvironment = (name) => {
-      events.push(`get-environment:${name}`);
-      return "1";
-    };
-    dependencies.verifyVoices = async () => {
-      events.push("verify-voices");
-      return Array.from({ length: 54 }, (_, index) =>
-        index === 0 ? "af_heart" : `voice_${index}`,
-      );
-    };
-    dependencies.writeSelfCheck = (result) => {
-      selfCheck = result;
+    const output = { stdout: [] as string[], stderr: [] as string[] };
+    const controller = new AbortController();
+    controller.abort();
+    const dependencies = dependenciesFor("not read", events, output);
+    dependencies.signal = controller.signal;
+
+    const exitCode = await runHelperMain(speakArguments, dependencies);
+
+    expect(exitCode).toBe(130);
+    expect(events).toEqual([]);
+    expect(output.stdout).toEqual([]);
+    expect(output.stderr).toEqual(["llm-now-kokoro: cancelled\n"]);
+  });
+
+  test.each([
+    [["info", "--protocol-major", "0"], "protocol-major-mismatch"],
+    [["info", "--protocol-major", "2"], "protocol-major-mismatch"],
+    [
+      [
+        "speak",
+        "--protocol-major",
+        "1",
+        "--require-capability",
+        "future-feature",
+      ],
+      "unsupported-capability",
+    ],
+  ])("returns protocol exit 2 before reading stdin", async (arguments_, diagnostic) => {
+    const events: string[] = [];
+    const output = { stdout: [] as string[], stderr: [] as string[] };
+    const dependencies = dependenciesFor("must remain unread", events, output);
+    dependencies.readStdin = async () => {
+      events.push("read-stdin");
+      return request("must remain unread");
     };
 
-    await expect(runCli(["Self check"], dependencies)).resolves.toBeUndefined();
+    const exitCode = await runHelperMain(arguments_, dependencies);
 
-    expect(selfCheck).toEqual({ status: "ok", voiceCount: 54, hasAfHeart: true });
-    expect(events).toEqual([
-      "get-environment:KOKORO_STANDALONE_VOICE_SELF_CHECK",
-      "install-voice-provider",
-      "verify-voices",
-      "restore-voice-provider",
-    ]);
+    expect(exitCode).toBe(2);
+    expect(events).toEqual([]);
+    expect(output.stderr.join("")).toContain(diagnostic);
   });
 });
 
-describe("runCliMain", () => {
-  test.each([
-    "Unable to prepare Kokoro model cache: permission denied",
-    "Unable to load Kokoro q8 model: download failed",
-    "Unable to synthesize speech: inference failed",
-    "Unable to play speech: afplay exited 1",
-  ])("prints a concise diagnostic without a normal stack trace", async (message) => {
-    const diagnostics: string[] = [];
-    const dependencies = unusedDependencies([]);
-    dependencies.synthesize = async () => {
-      throw new Error(`${message}\n    at internal.ts:42:1`);
-    };
-    dependencies.reportError = (diagnostic) => diagnostics.push(diagnostic);
+describe("exact protocol constants", () => {
+  test("uses the plan's stable limits", async () => {
+    const limits = await import("./limits");
 
-    await expect(runCliMain(["Hello"], dependencies)).resolves.toBe(1);
-    expect(diagnostics).toEqual([`kokoro-cli: ${message}`]);
+    expect(limits.MAX_TEXT_SCALARS).toBe(500);
+    expect(limits.MAX_NON_SPECIAL_TOKENS).toBe(509);
+    expect(limits.MAX_AUDIO_SAMPLES).toBe(1_800_000);
+    expect(limits.PHONEMIZATION_TIMEOUT_MS).toBe(10_000);
+    expect(limits.INFERENCE_TIMEOUT_MS).toBe(30_000);
+    expect(limits.OVERALL_TIMEOUT_MS).toBe(120_000);
+    expect(limits.MAX_DIAGNOSTIC_BYTES).toBe(16 * 1024);
   });
 });

@@ -1,0 +1,11 @@
+export const MAX_TEXT_SCALARS = 500;
+export const MAX_NON_SPECIAL_TOKENS = 509;
+export const MAX_AUDIO_SAMPLES = 1_800_000;
+export const AUDIO_SAMPLE_RATE_HZ = 24_000;
+
+export const PHONEMIZATION_TIMEOUT_MS = 10_000;
+export const INFERENCE_TIMEOUT_MS = 30_000;
+export const OVERALL_TIMEOUT_MS = 120_000;
+
+export const MAX_REQUEST_BYTES = 8 * 1024;
+export const MAX_DIAGNOSTIC_BYTES = 16 * 1024;

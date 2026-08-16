@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "kokoro-cli",
+      "name": "llm-now-kokoro",
       "dependencies": {
         "@huggingface/transformers": "3.5.1",
         "kokoro-js": "1.2.1",

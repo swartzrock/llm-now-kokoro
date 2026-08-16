@@ -1,265 +1,285 @@
 import {
-  EMBEDDED_VOICE_MANIFEST,
-  installEmbeddedVoiceProvider,
-  type SupportedVoiceName,
-  verifyEmbeddedVoices,
-} from "./embedded-voices";
-import type { InferenceBackend, PreparedRuntime } from "./backend";
-import { errorMessage } from "./error-message";
-import { ADDON_NAME, prepareNativeRuntime } from "./native-runtime";
-import { playAudio, type SavableAudio } from "./playback";
-import { prepareWasmRuntime } from "./wasm-runtime";
+  INFERENCE_TIMEOUT_MS,
+  MAX_AUDIO_SAMPLES,
+  MAX_DIAGNOSTIC_BYTES,
+  MAX_NON_SPECIAL_TOKENS,
+  MAX_REQUEST_BYTES,
+  OVERALL_TIMEOUT_MS,
+  PHONEMIZATION_TIMEOUT_MS,
+} from "./limits";
+import {
+  decodeSpeakRequest,
+  encodeInfoResponse,
+  parseHelperArguments,
+} from "./protocol";
+import {
+  HelperFailure,
+  cancellationFailure,
+  normalizeFailure,
+  operationFailure,
+  protocolFailure,
+  type HelperExitCode,
+} from "./result";
 
-const VOICE_SELF_CHECK_VARIABLE = "KOKORO_STANDALONE_VOICE_SELF_CHECK";
-
-export const DEFAULT_VOICE: SupportedVoiceName = "af_heart";
-export const SUPPORTED_VOICES = Object.freeze(
-  Object.keys(EMBEDDED_VOICE_MANIFEST) as SupportedVoiceName[],
-);
-const USAGE = 'Usage: kokoro-cli [--voice <voice>] [--wasm] "text to speak"';
-export const HELP_TEXT = `${USAGE}
-
-Speak text with the Kokoro q8 model.
-
-Options:
-  --voice <voice>  Select an embedded voice (default: ${DEFAULT_VOICE})
-  --wasm           Use WebAssembly instead of the native ONNX runtime
-  --help           Show this help
-
-Voice examples: af_heart, bf_emma, ef_dora, ff_siwis, jf_alpha, zf_xiaobei
-All ${SUPPORTED_VOICES.length} embedded voices use English pronunciation.`;
-
-interface VoiceSelfCheckResult {
-  status: "ok";
-  voiceCount: number;
-  hasAfHeart: boolean;
+export interface SpeechAnalysis {
+  nonSpecialTokenCount: number;
+  synthesisInput: unknown;
 }
 
-export interface CliDependencies {
-  installVoiceProvider?: () => () => void;
-  verifyVoices?: () => Promise<string[]>;
-  prepareRuntime?: (backend: InferenceBackend) => Promise<PreparedRuntime>;
-  synthesize?: (
+export interface SynthesizedAudio {
+  bytes: Uint8Array;
+  sampleCount: number;
+}
+
+export interface HelperDependencies {
+  readStdin?: (
+    maximumBytes: number,
+    signal: AbortSignal,
+  ) => Promise<Uint8Array>;
+  inspectText?: (
     text: string,
-    voice: SupportedVoiceName,
-    backend: InferenceBackend,
-  ) => Promise<SavableAudio>;
-  play?: (audio: SavableAudio) => Promise<void>;
-  getEnvironment?: (name: string) => string | undefined;
-  writeSelfCheck?: (result: VoiceSelfCheckResult) => void;
-  writeOutput?: (message: string) => void;
-  reportError?: (message: string) => void;
+    signal: AbortSignal,
+  ) => Promise<SpeechAnalysis>;
+  synthesize?: (
+    analysis: SpeechAnalysis,
+    signal: AbortSignal,
+  ) => Promise<SynthesizedAudio>;
+  play?: (audio: SynthesizedAudio, signal: AbortSignal) => Promise<void>;
+  selfTest?: (signal: AbortSignal) => Promise<void>;
+  signal?: AbortSignal;
+  writeStdout?: (value: string) => void;
+  writeStderr?: (value: string) => void;
 }
 
-export type CliCommand =
-  | { kind: "help" }
-  | {
-      kind: "speak";
-      text: string;
-      voice: SupportedVoiceName;
-      backend: InferenceBackend;
-    };
-
-export function parseCliArguments(arguments_: string[]): CliCommand {
-  if (arguments_.length === 1 && arguments_[0] === "--help") {
-    return { kind: "help" };
-  }
-
-  let text: string | undefined;
-  let voice: string = DEFAULT_VOICE;
-  let hasVoiceOption = false;
-  let useWasm = false;
-
-  for (let index = 0; index < arguments_.length; index += 1) {
-    const argument = arguments_[index];
-
-    if (argument === "--voice") {
-      if (hasVoiceOption) {
-        throw new Error("--voice may only be specified once.");
-      }
-
-      const value = arguments_[index + 1];
-      if (value === undefined || value.startsWith("--")) {
-        throw new Error("--voice requires a voice name and one text argument.");
-      }
-
-      voice = value;
-      hasVoiceOption = true;
-      index += 1;
-      continue;
-    }
-
-    if (argument === "--wasm") {
-      if (useWasm) {
-        throw new Error("--wasm may only be specified once.");
-      }
-      useWasm = true;
-      continue;
-    }
-
-    if (argument?.startsWith("--")) {
-      throw new Error(`Unknown option: ${argument}`);
-    }
-    if (text !== undefined) {
-      throw new Error(USAGE);
-    }
-    text = argument;
-  }
-
-  if (hasVoiceOption && text === undefined) {
-    throw new Error("--voice requires a voice name and one text argument.");
-  }
-  if (text === undefined) {
-    throw new Error(USAGE);
-  }
-  if (text.trim().length === 0) {
-    throw new Error("Text must contain non-whitespace characters.");
-  }
-  if (!isSupportedVoice(voice)) {
-    throw new Error(`Unknown voice: ${voice}. Run --help for usage.`);
-  }
-
-  return {
-    kind: "speak",
-    text,
-    voice,
-    backend: useWasm ? "wasm" : "native",
-  };
-}
-
-function isSupportedVoice(voice: string): voice is SupportedVoiceName {
-  return Object.hasOwn(EMBEDDED_VOICE_MANIFEST, voice);
-}
-
-export async function runCli(
+export async function runHelper(
   arguments_: string[],
-  dependencies: CliDependencies = {},
+  dependencies: HelperDependencies = {},
 ): Promise<void> {
-  const command = parseCliArguments(arguments_);
-  if (command.kind === "help") {
-    (dependencies.writeOutput ?? console.log)(HELP_TEXT);
+  const command = parseHelperArguments(arguments_);
+  const signal = dependencies.signal;
+  if (signal?.aborted) {
+    throw cancellationFailure();
+  }
+
+  if (command.operation === "info") {
+    writeBounded(
+      encodeInfoResponse(),
+      dependencies.writeStdout ?? ((value) => process.stdout.write(value)),
+    );
     return;
   }
 
-  const { text, voice, backend } = command;
-  const getEnvironment =
-    dependencies.getEnvironment ?? ((name: string) => process.env[name]);
-  const selfCheck = getEnvironment(VOICE_SELF_CHECK_VARIABLE) === "1";
-  const installVoiceProvider =
-    dependencies.installVoiceProvider ?? installEmbeddedVoiceProvider;
-  const restoreVoiceProvider = installVoiceProvider();
-
-  if (selfCheck) {
-    try {
-      const voices = await (dependencies.verifyVoices ?? verifyEmbeddedVoices)();
-      const result: VoiceSelfCheckResult = {
-        status: "ok",
-        voiceCount: voices.length,
-        hasAfHeart: voices.includes("af_heart"),
-      };
-      (dependencies.writeSelfCheck ?? writeSelfCheck)(result);
-    } finally {
-      restoreVoiceProvider();
-    }
-    return;
-  }
-
-  let runtime: PreparedRuntime | undefined;
-  let operationFailed = false;
-  let operationError: unknown;
-
-  try {
-    runtime = await (dependencies.prepareRuntime ?? prepareInferenceRuntime)(
-      backend,
-    );
-    const audio = await (dependencies.synthesize ?? synthesize)(
-      text,
-      voice,
-      backend,
-    );
-    await (dependencies.play ?? playAudio)(audio);
-  } catch (error) {
-    operationFailed = true;
-    operationError = error;
-  }
-
-  const cleanupErrors: unknown[] = [];
-  try {
-    await runtime?.cleanup();
-  } catch (error) {
-    cleanupErrors.push(error);
-  }
-  try {
-    restoreVoiceProvider();
-  } catch (error) {
-    cleanupErrors.push(error);
-  }
-
-  if (operationFailed) {
-    if (cleanupErrors.length > 0) {
-      const errors = [operationError, ...cleanupErrors];
-      throw new AggregateError(
-        errors,
-        errors.map(errorMessage).join("; "),
-      );
-    }
-    throw operationError;
-  }
-  if (cleanupErrors.length === 1) {
-    throw cleanupErrors[0];
-  }
-  if (cleanupErrors.length > 1) {
-    throw new AggregateError(cleanupErrors, "Unable to clean CLI resources");
-  }
+  await withDeadline(
+    OVERALL_TIMEOUT_MS,
+    signal,
+    operationFailure("overall-timeout"),
+    async (overallSignal) => {
+      if (command.operation === "self-test") {
+        await (dependencies.selfTest ?? unavailableSelfTest)(overallSignal);
+        return;
+      }
+      await speak(dependencies, overallSignal);
+    },
+  );
 }
 
-export async function runCliMain(
+export async function runHelperMain(
   arguments_: string[],
-  dependencies: CliDependencies = {},
-): Promise<number> {
+  dependencies: HelperDependencies = {},
+): Promise<HelperExitCode> {
   try {
-    await runCli(arguments_, dependencies);
+    await runHelper(arguments_, dependencies);
     return 0;
   } catch (error) {
-    const reportError = dependencies.reportError ?? console.error;
-    reportError(`kokoro-cli: ${errorMessage(error)}`);
-    return 1;
+    const failure = normalizeFailure(error);
+    const diagnostic = `llm-now-kokoro: ${failure.diagnostic}\n`;
+    writeBounded(
+      diagnostic,
+      dependencies.writeStderr ?? ((value) => process.stderr.write(value)),
+    );
+    return failure.exitCode;
   }
 }
 
-async function prepareInferenceRuntime(
-  backend: InferenceBackend,
-): Promise<PreparedRuntime> {
-  const hasEmbeddedNativeRuntime = Bun.embeddedFiles.some(
-    (file) => (file as Blob & { name: string }).name === ADDON_NAME,
-  );
+// The executable entrypoint retains this source-level name while its argv
+// surface is the private helper protocol above, not the prototype CLI.
+export const runCliMain = runHelperMain;
 
-  if (backend === "wasm") {
-    return prepareWasmRuntime();
-  }
-  if (hasEmbeddedNativeRuntime) {
-    return prepareNativeRuntime();
-  }
+async function speak(
+  dependencies: HelperDependencies,
+  overallSignal: AbortSignal,
+): Promise<void> {
+  const requestBytes = await (
+    dependencies.readStdin ?? readBoundedStdin
+  )(MAX_REQUEST_BYTES, overallSignal);
 
-  return {
-    cleanup: async () => {},
-  };
+  try {
+    throwIfAborted(overallSignal);
+    const request = decodeSpeakRequest(requestBytes);
+    const analysis = await withDeadline(
+      PHONEMIZATION_TIMEOUT_MS,
+      overallSignal,
+      operationFailure("phonemization-timeout"),
+      (signal) => (dependencies.inspectText ?? unavailableInspect)(request.text, signal),
+    );
+    validateAnalysis(analysis);
+
+    const audio = await withDeadline(
+      INFERENCE_TIMEOUT_MS,
+      overallSignal,
+      operationFailure("inference-timeout"),
+      (signal) => (dependencies.synthesize ?? unavailableSynthesis)(analysis, signal),
+    );
+    try {
+      validateAudio(audio);
+      await (dependencies.play ?? unavailablePlayback)(audio, overallSignal);
+    } finally {
+      audio.bytes.fill(0);
+    }
+  } finally {
+    requestBytes.fill(0);
+  }
 }
 
-async function synthesize(
-  text: string,
-  voice: SupportedVoiceName,
-  backend: InferenceBackend,
-): Promise<SavableAudio> {
-  if (process.env.KOKORO_OFFLINE === "1") {
-    const { env } = await import("@huggingface/transformers");
-    env.allowRemoteModels = false;
+function validateAnalysis(analysis: SpeechAnalysis): void {
+  if (
+    !Number.isSafeInteger(analysis.nonSpecialTokenCount) ||
+    analysis.nonSpecialTokenCount < 0
+  ) {
+    throw operationFailure("invalid-phonemizer-result");
   }
-
-  const { synthesizeSpeech } = await import("./tts");
-  return synthesizeSpeech(text, voice, backend);
+  if (analysis.nonSpecialTokenCount > MAX_NON_SPECIAL_TOKENS) {
+    throw protocolFailure("phoneme-token-limit");
+  }
 }
 
-function writeSelfCheck(result: VoiceSelfCheckResult): void {
-  console.log(JSON.stringify(result));
+function validateAudio(audio: SynthesizedAudio): void {
+  if (
+    !(audio.bytes instanceof Uint8Array) ||
+    !Number.isSafeInteger(audio.sampleCount) ||
+    audio.sampleCount < 0
+  ) {
+    throw operationFailure("invalid-inference-result");
+  }
+  if (audio.sampleCount > MAX_AUDIO_SAMPLES) {
+    throw protocolFailure("audio-sample-limit");
+  }
+}
+
+async function readBoundedStdin(
+  maximumBytes: number,
+  signal: AbortSignal,
+): Promise<Uint8Array> {
+  const reader = Bun.stdin.stream().getReader();
+  const chunks: Uint8Array[] = [];
+  let byteLength = 0;
+
+  try {
+    while (true) {
+      throwIfAborted(signal);
+      const next = await withAbort(reader.read(), signal);
+      if (next.done) {
+        break;
+      }
+      chunks.push(next.value);
+      byteLength += next.value.byteLength;
+      if (byteLength > maximumBytes) {
+        throw protocolFailure("request-too-large");
+      }
+    }
+
+    const result = new Uint8Array(byteLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      result.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return result;
+  } catch (error) {
+    await reader.cancel().catch(() => {});
+    throw error;
+  } finally {
+    for (const chunk of chunks) {
+      chunk.fill(0);
+    }
+    reader.releaseLock();
+  }
+}
+
+async function withDeadline<T>(
+  milliseconds: number,
+  parentSignal: AbortSignal | undefined,
+  timeoutFailure: HelperFailure,
+  task: (signal: AbortSignal) => Promise<T>,
+): Promise<T> {
+  if (parentSignal?.aborted) {
+    throw abortReason(parentSignal);
+  }
+
+  const controller = new AbortController();
+  const onParentAbort = () => controller.abort(abortReason(parentSignal!));
+  parentSignal?.addEventListener("abort", onParentAbort, { once: true });
+  const timeout = setTimeout(() => controller.abort(timeoutFailure), milliseconds);
+
+  try {
+    return await withAbort(task(controller.signal), controller.signal);
+  } finally {
+    clearTimeout(timeout);
+    parentSignal?.removeEventListener("abort", onParentAbort);
+  }
+}
+
+function withAbort<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    return Promise.reject(abortReason(signal));
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortReason(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
+
+function abortReason(signal: AbortSignal): HelperFailure {
+  return signal.reason instanceof HelperFailure
+    ? signal.reason
+    : cancellationFailure();
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) {
+    throw abortReason(signal);
+  }
+}
+
+function writeBounded(value: string, write: (value: string) => void): void {
+  if (new TextEncoder().encode(value).byteLength > MAX_DIAGNOSTIC_BYTES) {
+    throw operationFailure("output-limit");
+  }
+  write(value);
+}
+
+async function unavailableSelfTest(): Promise<never> {
+  throw operationFailure("self-test-unavailable");
+}
+
+async function unavailableInspect(): Promise<never> {
+  throw operationFailure("speech-engine-unavailable");
+}
+
+async function unavailableSynthesis(): Promise<never> {
+  throw operationFailure("speech-engine-unavailable");
+}
+
+async function unavailablePlayback(): Promise<never> {
+  throw operationFailure("player-unavailable");
 }
