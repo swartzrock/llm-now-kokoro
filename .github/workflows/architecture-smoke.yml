@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: native-architecture-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   native-smoke:
     name: ${{ matrix.target }}

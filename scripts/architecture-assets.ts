@@ -85,13 +85,27 @@ export async function prepareArchitectureAssets(): Promise<void> {
     const partial = `${asset.destination}.part`;
     await rm(partial, { force: true });
 
-    const response = await fetch(asset.url, { redirect: "follow" });
-    if (!response.ok || !response.body) {
-      throw new Error(`Architecture asset download failed (${response.status})`);
-    }
-
     try {
-      await Bun.write(partial, response);
+      const child = Bun.spawn([
+        process.platform === "win32" ? "curl.exe" : "curl",
+        "--connect-timeout",
+        "15",
+        "--fail",
+        "--location",
+        "--max-time",
+        "300",
+        "--output",
+        partial,
+        "--retry",
+        "3",
+        "--show-error",
+        "--silent",
+        asset.url,
+      ]);
+      const exitCode = await child.exited;
+      if (exitCode !== 0) {
+        throw new Error(`Architecture asset download failed (${exitCode})`);
+      }
       if (!(await isExpectedAsset({ ...asset, destination: partial }))) {
         throw new Error("Architecture asset digest or size mismatch");
       }
