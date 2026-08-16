@@ -23,6 +23,9 @@ function dependenciesFor(
   output: { stdout: string[]; stderr: string[] },
 ): HelperDependencies {
   return {
+    preflight: async () => {
+      events.push("preflight");
+    },
     readStdin: async () => request(text),
     inspectText: async (receivedText) => {
       events.push(`inspect:${receivedText}`);
@@ -92,11 +95,32 @@ describe("internal helper operations", () => {
     expect(exitCode).toBe(0);
     expect(speakArguments.join(" ")).not.toContain(text);
     expect(events).toEqual([
+      "preflight",
       `inspect:${text}`,
       "synthesize:opaque",
       "play:3",
     ]);
     expect(output).toEqual({ stdout: [], stderr: [] });
+  });
+
+  test("rejects an invalid fixed pack before acquiring answer text", async () => {
+    const events: string[] = [];
+    const output = { stdout: [] as string[], stderr: [] as string[] };
+    const dependencies = dependenciesFor("must remain unread", events, output);
+    dependencies.preflight = async () => {
+      events.push("preflight");
+      throw new Error("model-asset-invalid:q8-model");
+    };
+    dependencies.readStdin = async () => {
+      events.push("read-stdin");
+      return request("must remain unread");
+    };
+
+    const exitCode = await runHelperMain(speakArguments, dependencies);
+
+    expect(exitCode).toBe(1);
+    expect(events).toEqual(["preflight"]);
+    expect(output.stderr).toEqual(["llm-now-kokoro: operation-failed\n"]);
   });
 
   test.each([
@@ -115,7 +139,7 @@ describe("internal helper operations", () => {
       const exitCode = await runHelperMain(speakArguments, dependencies);
 
       expect(exitCode).toBe(2);
-      expect(events).toEqual([]);
+      expect(events).toEqual(["preflight"]);
       expect(output.stdout).toEqual([]);
       expect(output.stderr.join("")).toContain(diagnostic);
     },
@@ -136,7 +160,7 @@ describe("internal helper operations", () => {
     const exitCode = await runHelperMain(speakArguments, dependencies);
 
     expect(exitCode).toBe(2);
-    expect(events).toEqual(["inspect"]);
+    expect(events).toEqual(["preflight", "inspect"]);
     expect(output.stderr.join("")).toContain("phoneme-token-limit");
   });
 
@@ -155,7 +179,11 @@ describe("internal helper operations", () => {
     const exitCode = await runHelperMain(speakArguments, dependencies);
 
     expect(exitCode).toBe(2);
-    expect(events).toEqual(["inspect:long audio", "synthesize"]);
+    expect(events).toEqual([
+      "preflight",
+      "inspect:long audio",
+      "synthesize",
+    ]);
     expect(output.stderr.join("")).toContain("audio-sample-limit");
   });
 

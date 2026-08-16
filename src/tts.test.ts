@@ -1,149 +1,212 @@
 import { describe, expect, test } from "bun:test";
 
-import { synthesizeSpeech } from "./tts";
+import { MAX_AUDIO_SAMPLES, MAX_NON_SPECIAL_TOKENS } from "./limits";
+import {
+  createNativeHelperDependencies,
+  createNativeSpeechEngine,
+  type SpeechEngineDependencies,
+} from "./tts";
 
-describe("synthesizeSpeech", () => {
-  test("uses the fixed q8 CPU model, selected voice, and speed", async () => {
-    const events: string[] = [];
-    let modelRequest: unknown;
-    let synthesisRequest: unknown;
-    const output = {
-      audio: new Float32Array([0.25]),
-      sampling_rate: 24_000,
-      save: async () => {},
-    };
+const signal = new AbortController().signal;
+const voiceProviderSymbol = Symbol.for("kokoro-js.voice-provider");
 
-    const result = await synthesizeSpeech("Hello", "af_bella", "native", {
-      homeDirectory: "/Users/alice",
-      prepareCache: async () => {
-        events.push("prepare-cache");
-        return "/Users/alice/Library/Caches/kokoro-cli/transformers";
-      },
-      configureCache: (cachePath) => {
-        events.push(`configure-cache:${cachePath}`);
-      },
-      createModel: async (modelId, options) => {
-        events.push("create-model");
-        modelRequest = { modelId, options };
-        return {
-          generate: async (text, options) => {
-            synthesisRequest = { text, options };
-            return output;
-          },
-        };
-      },
-      reportProgress: (message) => events.push(`progress:${message}`),
-    });
+function mockDependencies(options: {
+  audioSamples?: number;
+  tokenLength?: number;
+} = {}) {
+  const events: unknown[] = [];
+  const environment = {
+    allowLocalModels: false,
+    allowRemoteModels: true,
+    localModelPath: "/untrusted",
+    useBrowserCache: true,
+    useFSCache: true,
+  };
+  const inputIds = { dims: [1, options.tokenLength ?? 7] };
+  const model = {
+    tokenizer: (phonemes: string, tokenizerOptions: { truncation: false }) => {
+      events.push(["tokenize", phonemes, tokenizerOptions]);
+      return { input_ids: inputIds };
+    },
+    generate_from_ids: async (
+      receivedIds: typeof inputIds,
+      generateOptions: { voice: "af_heart"; speed: 1 },
+    ) => {
+      events.push(["infer", receivedIds, generateOptions]);
+      const samples = new Float32Array(options.audioSamples ?? 2);
+      return {
+        audio: samples,
+        sampling_rate: 24_000,
+        toWav: () => new Uint8Array([82, 73, 70, 70]).buffer,
+      };
+    },
+  };
+  const dependencies: SpeechEngineDependencies = {
+    verifyAssets: async (packRoot) => {
+      events.push(["verify", packRoot]);
+    },
+    prepareRuntime: async (packRoot) => {
+      events.push(["runtime", packRoot]);
+    },
+    readVoice: async (path) => {
+      events.push(["voice", path]);
+      return new ArrayBuffer(4);
+    },
+    loadLibraries: async () => {
+      events.push(["load"]);
+      return {
+        env: environment,
+        phonemize: async (text: string, language: "a") => {
+          events.push(["phonemize", text, language]);
+          return "həlˈoʊ";
+        },
+        fromPretrained: async (modelId, modelOptions) => {
+          events.push(["model", modelId, modelOptions]);
+          return model;
+        },
+      };
+    },
+  };
+  return { dependencies, environment, events, inputIds };
+}
 
-    expect(result).toBe(output);
-    expect(events.slice(0, 3)).toEqual([
-      "prepare-cache",
-      "configure-cache:/Users/alice/Library/Caches/kokoro-cli/transformers",
-      expect.stringContaining("progress:Loading Kokoro q8 model"),
-    ]);
-    expect(events[3]).toBe("create-model");
-    expect(modelRequest).toEqual({
-      modelId: "onnx-community/Kokoro-82M-v1.0-ONNX",
-      options: {
-        dtype: "q8",
-        device: "cpu",
-        progress_callback: expect.any(Function),
-      },
-    });
-    expect(synthesisRequest).toEqual({
-      text: "Hello",
-      options: { voice: "af_bella", speed: 1.0 },
-    });
-  });
-
-  test("requests the installed WASM execution provider", async () => {
-    let modelRequest: unknown;
-
-    await synthesizeSpeech("Hello", "af_heart", "wasm", {
-      homeDirectory: "/Users/alice",
-      prepareCache: async () =>
-        "/Users/alice/Library/Caches/kokoro-cli/transformers",
-      configureCache: () => {},
-      createModel: async (modelId, options) => {
-        modelRequest = { modelId, options };
-        return {
-          generate: async () => ({
-            audio: new Float32Array([0.25]),
-            sampling_rate: 24_000,
-            save: async () => {},
-          }),
-        };
-      },
-      reportProgress: () => {},
-    });
-
-    expect(modelRequest).toEqual({
-      modelId: "onnx-community/Kokoro-82M-v1.0-ONNX",
-      options: {
-        dtype: "q8",
-        device: "wasm",
-        progress_callback: expect.any(Function),
-      },
-    });
-  });
-
-  test("only labels missing cache files as downloads", async () => {
-    const progress: string[] = [];
-
-    await synthesizeSpeech("Hello", "af_heart", "native", {
-      homeDirectory: "/Users/alice",
-      prepareCache: async () =>
-        "/Users/alice/Library/Caches/kokoro-cli/transformers",
-      configureCache: () => {},
-      isModelFileCached: (_cachePath, _modelId, file) =>
-        file === "config.json",
-      createModel: async (_modelId, options) => {
-        options.progress_callback({
-          status: "download",
-          name: "onnx-community/Kokoro-82M-v1.0-ONNX",
-          file: "config.json",
-        });
-        options.progress_callback({
-          status: "download",
-          name: "onnx-community/Kokoro-82M-v1.0-ONNX",
-          file: "onnx/model_quantized.onnx",
-        });
-        return {
-          generate: async () => ({
-            audio: new Float32Array([0.25]),
-            sampling_rate: 24_000,
-            save: async () => {},
-          }),
-        };
-      },
-      reportProgress: (message) => progress.push(message),
-    });
-
-    expect(progress).not.toContain("Downloading config.json...");
-    expect(progress).toContain("Downloading onnx/model_quantized.onnx...");
-  });
-
-  test("reports a concise model-load error that names the cache", async () => {
-    const failure = synthesizeSpeech("Hello", "af_heart", "native", {
-      homeDirectory: "/Users/alice",
-      prepareCache: async () =>
-        "/Users/alice/Library/Caches/kokoro-cli/transformers",
-      configureCache: () => {},
-      createModel: async () => {
-        throw new Error("download failed\n    at internal-loader.ts:42:1");
-      },
-      reportProgress: () => {},
-    });
-
-    await expect(failure).rejects.toThrow(
-      "Unable to load Kokoro q8 model using cache /Users/alice/Library/Caches/kokoro-cli/transformers: download failed",
+describe("native local-only speech engine", () => {
+  test("loads verified files and sidecars before importing a fixed q8 CPU model", async () => {
+    const { dependencies, environment, events } = mockDependencies();
+    const engine = await createNativeSpeechEngine(
+      "/packs/with spaces/ユニコード",
+      dependencies,
     );
 
-    try {
-      await failure;
-    } catch (error) {
-      expect((error as Error).message).not.toContain("internal-loader.ts");
-      expect((error as Error).message).not.toContain("\n");
+    expect(events.slice(0, 4)).toEqual([
+      ["verify", "/packs/with spaces/ユニコード"],
+      ["runtime", "/packs/with spaces/ユニコード"],
+      ["load"],
+      ["model", "model", { device: "cpu", dtype: "q8" }],
+    ]);
+    expect(environment).toEqual({
+      allowLocalModels: true,
+      allowRemoteModels: false,
+      localModelPath: "/packs/with spaces/ユニコード",
+      useBrowserCache: false,
+      useFSCache: false,
+    });
+
+    const provider = (
+      globalThis as typeof globalThis & Record<symbol, unknown>
+    )[voiceProviderSymbol] as (voice: string) => Promise<ArrayBuffer>;
+    await provider("af_heart");
+    await expect(provider("af_bella")).rejects.toThrow("unsupported-voice");
+    expect(events).toContainEqual([
+      "voice",
+      "/packs/with spaces/ユニコード/model/voices/af_heart.bin",
+    ]);
+
+    const analysis = await engine.inspectText("Hello", signal);
+    const audio = await engine.synthesize(analysis, signal);
+    expect(analysis.nonSpecialTokenCount).toBe(5);
+    expect(audio).toEqual({
+      bytes: new Uint8Array([82, 73, 70, 70]),
+      sampleCount: 2,
+    });
+    expect(events).toContainEqual(["phonemize", "Hello", "a"]);
+    expect(events).toContainEqual([
+      "tokenize",
+      "həlˈoʊ",
+      { truncation: false },
+    ]);
+    expect(events).toContainEqual([
+      "infer",
+      analysis.synthesisInput,
+      { voice: "af_heart", speed: 1 },
+    ]);
+  });
+
+  test("uses generate_from_ids and has no generate text path", async () => {
+    const { dependencies, events } = mockDependencies();
+    const engine = await createNativeSpeechEngine("/pack", dependencies);
+    const analysis = await engine.inspectText("text never reaches ONNX", signal);
+    await engine.synthesize(analysis, signal);
+
+    expect(events.filter((event) => (event as unknown[])[0] === "infer")).toHaveLength(1);
+    expect(JSON.stringify(events)).not.toContain("truncation\":true");
+  });
+
+  test("reports 509 non-special tokens without truncating", async () => {
+    const { dependencies, events } = mockDependencies({
+      tokenLength: MAX_NON_SPECIAL_TOKENS + 2,
+    });
+    const engine = await createNativeSpeechEngine("/pack", dependencies);
+    const analysis = await engine.inspectText("boundary", signal);
+
+    expect(analysis.nonSpecialTokenCount).toBe(MAX_NON_SPECIAL_TOKENS);
+    expect(events).toContainEqual([
+      "tokenize",
+      "həlˈoʊ",
+      { truncation: false },
+    ]);
+  });
+
+  test("rejects over-limit tokens before native inference", async () => {
+    const { dependencies, events } = mockDependencies({
+      tokenLength: MAX_NON_SPECIAL_TOKENS + 3,
+    });
+    const engine = await createNativeSpeechEngine("/pack", dependencies);
+    const analysis = await engine.inspectText("expanded", signal);
+
+    await expect(engine.synthesize(analysis, signal)).rejects.toThrow(
+      "invalid-synthesis-input",
+    );
+    expect(events.some((event) => (event as unknown[])[0] === "infer")).toBe(false);
+  });
+
+  test("rejects audio longer than 1,800,000 samples", async () => {
+    const { dependencies } = mockDependencies({
+      audioSamples: MAX_AUDIO_SAMPLES + 1,
+    });
+    const engine = await createNativeSpeechEngine("/pack", dependencies);
+    const analysis = await engine.inspectText("long", signal);
+
+    await expect(engine.synthesize(analysis, signal)).rejects.toThrow(
+      "invalid-audio-result",
+    );
+  });
+
+  test("reuses one verified native model across sequential calls", async () => {
+    const { dependencies, events } = mockDependencies();
+    const helper = createNativeHelperDependencies("/pack", dependencies);
+    await helper.preflight!(signal);
+    for (const text of ["first", "second"]) {
+      const analysis = await helper.inspectText!(text, signal);
+      await helper.synthesize!(analysis, signal);
     }
+
+    expect(events.filter((event) => (event as unknown[])[0] === "model")).toHaveLength(1);
+    expect(events.filter((event) => (event as unknown[])[0] === "infer")).toHaveLength(2);
+  });
+
+  test("preflight verifies fixed files and sidecars without starting ONNX", async () => {
+    const { dependencies, events } = mockDependencies();
+    const helper = createNativeHelperDependencies("/pack", dependencies);
+
+    await helper.preflight!(signal);
+
+    expect(events).toEqual([
+      ["verify", "/pack"],
+      ["runtime", "/pack"],
+    ]);
+  });
+
+  test("silent self-test executes fixed synthesis and clears its WAV bytes", async () => {
+    const { dependencies, events } = mockDependencies();
+    const helper = createNativeHelperDependencies("/pack", dependencies);
+    await helper.selfTest!(signal);
+
+    expect(events).toContainEqual([
+      "phonemize",
+      "Native speech engine self test.",
+      "a",
+    ]);
+    expect(events.filter((event) => (event as unknown[])[0] === "infer")).toHaveLength(1);
   });
 });

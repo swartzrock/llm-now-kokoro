@@ -1,146 +1,261 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { readFile } from "node:fs/promises";
+import { isAbsolute, resolve } from "node:path";
 
-import { env, type ProgressCallback, type ProgressInfo } from "@huggingface/transformers";
-import { KokoroTTS } from "kokoro-js";
-
-import type { InferenceBackend } from "./backend";
-import { prepareModelCache } from "./cache";
+import type {
+  HelperDependencies,
+  SpeechAnalysis,
+  SynthesizedAudio,
+} from "./cli";
 import {
-  EMBEDDED_VOICE_MANIFEST,
-  type SupportedVoiceName,
+  FIXED_SPEED,
+  FIXED_VOICE,
+  FIXED_VOICE_RELATIVE_PATH,
 } from "./embedded-voices";
-import { errorMessage } from "./error-message";
+import { MAX_AUDIO_SAMPLES, MAX_NON_SPECIAL_TOKENS } from "./limits";
+import { verifyLocalModelAssets } from "./model-assets";
+import { prepareNativeRuntime } from "./native-runtime";
 
-const MODEL_ID = "onnx-community/Kokoro-82M-v1.0-ONNX";
-
+const MODEL_ID = "model";
 const MODEL_DTYPE = "q8" as const;
+const SELF_TEST_TEXT = "Native speech engine self test.";
+const VOICE_PROVIDER_SYMBOL = Symbol.for("kokoro-js.voice-provider");
 
-interface GenerateOptions {
-  voice: SupportedVoiceName;
-  speed: number;
+interface TokenIds {
+  dims: readonly number[];
 }
 
-export interface GeneratedAudio {
+interface RawAudio {
   audio: Float32Array;
   sampling_rate: number;
-  save(path: string): Promise<void>;
+  toWav(): ArrayBuffer;
 }
 
-interface SpeechModel {
-  generate(text: string, options: GenerateOptions): Promise<GeneratedAudio>;
+interface KokoroModel {
+  tokenizer(
+    text: string,
+    options: { truncation: false },
+  ): { input_ids: TokenIds };
+  generate_from_ids(
+    inputIds: TokenIds,
+    options: { voice: typeof FIXED_VOICE; speed: typeof FIXED_SPEED },
+  ): Promise<RawAudio>;
 }
 
-interface ModelOptions {
-  dtype: typeof MODEL_DTYPE;
-  device: "cpu" | "wasm";
-  progress_callback: ProgressCallback;
-}
-
-export interface SynthesisDependencies {
-  homeDirectory?: string;
-  prepareCache?: (homeDirectory?: string) => Promise<string>;
-  configureCache?: (cachePath: string) => void;
-  createModel?: (modelId: string, options: ModelOptions) => Promise<SpeechModel>;
-  isModelFileCached?: (
-    cachePath: string,
+interface SpeechLibraries {
+  env: {
+    allowLocalModels: boolean;
+    allowRemoteModels: boolean;
+    localModelPath: string;
+    useBrowserCache: boolean;
+    useFSCache: boolean;
+  };
+  fromPretrained(
     modelId: string,
-    file: string,
-  ) => boolean;
-  reportProgress?: (message: string) => void;
+    options: { device: "cpu"; dtype: typeof MODEL_DTYPE },
+  ): Promise<KokoroModel>;
+  phonemize(text: string, language: "a"): Promise<string>;
 }
 
-export async function synthesizeSpeech(
-  text: string,
-  voice: SupportedVoiceName,
-  backend: InferenceBackend = "native",
-  dependencies: SynthesisDependencies = {},
-): Promise<GeneratedAudio> {
-  const prepareCache = dependencies.prepareCache ?? prepareModelCache;
-  const configureCache = dependencies.configureCache ?? configureTransformersCache;
-  const createModel = dependencies.createModel ?? createKokoroModel;
-  const isModelFileCached =
-    dependencies.isModelFileCached ?? modelFileIsCached;
-  const reportProgress = dependencies.reportProgress ?? reportToStderr;
-  const cachePath = await prepareCache(dependencies.homeDirectory ?? undefined);
+export interface NativeSpeechEngine {
+  inspectText(text: string, signal: AbortSignal): Promise<SpeechAnalysis>;
+  synthesize(
+    analysis: SpeechAnalysis,
+    signal: AbortSignal,
+  ): Promise<SynthesizedAudio>;
+}
 
-  configureCache(cachePath);
-  reportProgress(`Loading Kokoro q8 model (cache: ${cachePath})...`);
+export interface SpeechEngineDependencies {
+  loadLibraries?: () => Promise<SpeechLibraries>;
+  prepareRuntime?: (packRoot: string) => Promise<unknown>;
+  readVoice?: (path: string) => Promise<ArrayBuffer>;
+  verifyAssets?: (packRoot: string) => Promise<void>;
+}
 
-  let model: SpeechModel;
+export async function createNativeSpeechEngine(
+  packRoot = process.cwd(),
+  dependencies: SpeechEngineDependencies = {},
+): Promise<NativeSpeechEngine> {
+  await prepareNativeSpeechPack(packRoot, dependencies);
+  return loadPreparedSpeechEngine(packRoot, dependencies);
+}
+
+async function prepareNativeSpeechPack(
+  packRoot: string,
+  dependencies: SpeechEngineDependencies,
+): Promise<void> {
+  if (!isAbsolute(packRoot)) throw new Error("pack-root-not-absolute");
+  await (dependencies.verifyAssets ?? verifyLocalModelAssets)(packRoot);
+  await (dependencies.prepareRuntime ?? prepareNativeRuntime)(packRoot);
+  installVoiceProvider(
+    resolve(packRoot, FIXED_VOICE_RELATIVE_PATH),
+    dependencies.readVoice ?? readVoiceFile,
+  );
+}
+
+async function loadPreparedSpeechEngine(
+  packRoot: string,
+  dependencies: SpeechEngineDependencies,
+): Promise<NativeSpeechEngine> {
+  const libraries = await (dependencies.loadLibraries ?? loadSpeechLibraries)();
+  libraries.env.allowLocalModels = true;
+  libraries.env.allowRemoteModels = false;
+  libraries.env.localModelPath = packRoot;
+  libraries.env.useBrowserCache = false;
+  libraries.env.useFSCache = false;
+
+  let model: KokoroModel;
   try {
-    model = await createModel(MODEL_ID, {
+    model = await libraries.fromPretrained(MODEL_ID, {
+      device: "cpu",
       dtype: MODEL_DTYPE,
-      device: backend === "native" ? "cpu" : "wasm",
-      progress_callback: createProgressCallback(
-        cachePath,
-        isModelFileCached,
-        reportProgress,
-      ),
     });
-  } catch (error) {
-    throw new Error(
-      `Unable to load Kokoro q8 model using cache ${cachePath}: ${errorMessage(error)}`,
-    );
+  } catch {
+    throw new Error("native-model-load-failed");
   }
 
-  try {
-    return await model.generate(text, { voice, speed: 1.0 });
-  } catch (error) {
-    throw new Error(`Unable to synthesize speech: ${errorMessage(error)}`);
-  }
-}
+  return {
+    async inspectText(text, signal) {
+      throwIfAborted(signal);
+      let phonemes: string;
+      try {
+        phonemes = await libraries.phonemize(text, "a");
+      } catch {
+        throw new Error("phonemization-failed");
+      }
+      throwIfAborted(signal);
+      let inputIds: TokenIds;
+      try {
+        ({ input_ids: inputIds } = model.tokenizer(phonemes, {
+          truncation: false,
+        }));
+      } catch {
+        throw new Error("tokenization-failed");
+      }
+      const length = inputIds.dims.at(-1);
+      if (!Number.isSafeInteger(length) || length! < 2) {
+        throw new Error("tokenization-failed");
+      }
+      return {
+        nonSpecialTokenCount: length! - 2,
+        synthesisInput: inputIds,
+      };
+    },
 
-async function createKokoroModel(
-  modelId: string,
-  options: ModelOptions,
-): Promise<SpeechModel> {
-  const model = await KokoroTTS.from_pretrained(modelId, options);
-  const validateVoice = model._validate_voice.bind(model);
-
-  model._validate_voice = (voice: unknown) => {
-    if (
-      typeof voice === "string" &&
-      Object.hasOwn(EMBEDDED_VOICE_MANIFEST, voice)
-    ) {
-      return voice.startsWith("b") ? "b" : "a";
-    }
-    return validateVoice(voice);
+    async synthesize(analysis, signal) {
+      throwIfAborted(signal);
+      if (
+        analysis.nonSpecialTokenCount > MAX_NON_SPECIAL_TOKENS ||
+        !isTokenIds(analysis.synthesisInput)
+      ) {
+        throw new Error("invalid-synthesis-input");
+      }
+      let audio: RawAudio;
+      try {
+        audio = await model.generate_from_ids(analysis.synthesisInput, {
+          voice: FIXED_VOICE,
+          speed: FIXED_SPEED,
+        });
+      } catch {
+        throw new Error("native-inference-failed");
+      }
+      throwIfAborted(signal);
+      if (
+        audio.sampling_rate !== 24_000 ||
+        audio.audio.length === 0 ||
+        audio.audio.length > MAX_AUDIO_SAMPLES
+      ) {
+        throw new Error("invalid-audio-result");
+      }
+      return {
+        bytes: new Uint8Array(audio.toWav()),
+        sampleCount: audio.audio.length,
+      };
+    },
   };
-
-  // kokoro-js 1.2.1 ships multilingual voice files but omits them from its public type.
-  return model as unknown as SpeechModel;
 }
 
-function configureTransformersCache(cachePath: string): void {
-  env.cacheDir = cachePath;
-}
+export function createNativeHelperDependencies(
+  packRoot = process.cwd(),
+  dependencies: SpeechEngineDependencies = {},
+): Pick<
+  HelperDependencies,
+  "inspectText" | "preflight" | "selfTest" | "synthesize"
+> {
+  let preflightPromise: Promise<void> | undefined;
+  let enginePromise: Promise<NativeSpeechEngine> | undefined;
+  const preflight = () =>
+    (preflightPromise ??= prepareNativeSpeechPack(packRoot, dependencies));
+  const engine = () =>
+    (enginePromise ??= preflight().then(() =>
+      loadPreparedSpeechEngine(packRoot, dependencies),
+    ));
 
-function createProgressCallback(
-  cachePath: string,
-  isModelFileCached: NonNullable<SynthesisDependencies["isModelFileCached"]>,
-  reportProgress: (message: string) => void,
-): ProgressCallback {
-  return (progress: ProgressInfo) => {
-    if (
-      progress.status === "download" &&
-      !isModelFileCached(cachePath, progress.name, progress.file)
-    ) {
-      reportProgress(`Downloading ${progress.file}...`);
-    } else if (progress.status === "ready") {
-      reportProgress("Kokoro q8 model ready.");
-    }
+  return {
+    preflight: async (signal) => {
+      throwIfAborted(signal);
+      await preflight();
+      throwIfAborted(signal);
+    },
+    inspectText: async (text, signal) =>
+      (await engine()).inspectText(text, signal),
+    synthesize: async (analysis, signal) =>
+      (await engine()).synthesize(analysis, signal),
+    selfTest: async (signal) => {
+      const ready = await engine();
+      const analysis = await ready.inspectText(SELF_TEST_TEXT, signal);
+      if (analysis.nonSpecialTokenCount > MAX_NON_SPECIAL_TOKENS) {
+        throw new Error("self-test-input-invalid");
+      }
+      const audio = await ready.synthesize(analysis, signal);
+      audio.bytes.fill(0);
+    },
   };
 }
 
-function modelFileIsCached(
-  cachePath: string,
-  modelId: string,
-  file: string,
-): boolean {
-  return existsSync(join(cachePath, modelId, file));
+async function loadSpeechLibraries(): Promise<SpeechLibraries> {
+  const transformers = await import("@huggingface/transformers");
+  const kokoro = await import("kokoro-js");
+  return {
+    env: transformers.env,
+    fromPretrained: (modelId, options) =>
+      kokoro.KokoroTTS.from_pretrained(modelId, options) as Promise<KokoroModel>,
+    phonemize: kokoro.phonemize,
+  };
 }
 
-function reportToStderr(message: string): void {
-  console.error(message);
+function installVoiceProvider(
+  path: string,
+  readVoice: (path: string) => Promise<ArrayBuffer>,
+): void {
+  Object.defineProperty(globalThis, VOICE_PROVIDER_SYMBOL, {
+    configurable: true,
+    value: async (voice: string) => {
+      if (voice !== FIXED_VOICE) throw new Error("unsupported-voice");
+      try {
+        return await readVoice(path);
+      } catch {
+        throw new Error("voice-asset-unavailable");
+      }
+    },
+  });
+}
+
+async function readVoiceFile(path: string): Promise<ArrayBuffer> {
+  const bytes = await readFile(path);
+  return bytes.buffer.slice(
+    bytes.byteOffset,
+    bytes.byteOffset + bytes.byteLength,
+  ) as ArrayBuffer;
+}
+
+function isTokenIds(value: unknown): value is TokenIds {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    Array.isArray((value as TokenIds).dims)
+  );
+}
+
+function throwIfAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw signal.reason ?? new Error("cancelled");
 }

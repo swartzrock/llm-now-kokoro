@@ -1,33 +1,15 @@
-import { mkdir, readdir } from "node:fs/promises";
+import { chmod, mkdir } from "node:fs/promises";
 import { resolve } from "node:path";
 
-import {
-  EMBEDDED_VOICE_MANIFEST,
-  EXPECTED_VOICE_COUNT,
-  type EmbeddedVoiceName,
-} from "./src/embedded-voices";
-import { ADDON_NAME, DYLIB_NAME } from "./src/native-runtime";
-import { WASM_ASSET_NAMES } from "./src/wasm-runtime";
+import { verifyPinnedPhonemizerBundle } from "./src/model-assets";
 
 const REQUIRED_BUN_VERSION = "1.3.14";
-
 const ROOT_DIRECTORY = import.meta.dir;
-const VOICE_DIRECTORY = resolve(ROOT_DIRECTORY, "node_modules/kokoro-js/voices");
-const DIST_DIRECTORY = resolve(ROOT_DIRECTORY, "dist");
-const BINARY_PATH = resolve(DIST_DIRECTORY, "kokoro-cli");
-const MANIFEST_PATH = resolve(DIST_DIRECTORY, "embedded-voices.manifest.json");
-const NATIVE_DIRECTORY = resolve(
+const BINARY_PATH = resolve(
   ROOT_DIRECTORY,
-  "node_modules/onnxruntime-node/bin/napi-v3",
-  process.platform,
-  process.arch,
-);
-const NATIVE_ASSETS = [ADDON_NAME, DYLIB_NAME].map((name) =>
-  resolve(NATIVE_DIRECTORY, name),
-);
-const WASM_DIRECTORY = resolve(ROOT_DIRECTORY, "node_modules/onnxruntime-web/dist");
-const WASM_ASSETS = WASM_ASSET_NAMES.map((name) =>
-  resolve(WASM_DIRECTORY, name),
+  process.platform === "win32"
+    ? "dist/llm-now-kokoro.exe"
+    : "dist/llm-now-kokoro",
 );
 
 export function assertBunVersion(actualVersion = Bun.version): void {
@@ -38,56 +20,21 @@ export function assertBunVersion(actualVersion = Bun.version): void {
   }
 }
 
-async function verifyPinnedVoicePackage(): Promise<void> {
-  const packageVoices = (await readdir(VOICE_DIRECTORY))
-    .filter((name) => name.endsWith(".bin"))
-    .sort();
-  const manifestVoices = Object.values(EMBEDDED_VOICE_MANIFEST)
-    .map((entry) => entry.file)
-    .sort();
-
-  if (
-    packageVoices.length !== EXPECTED_VOICE_COUNT ||
-    !packageVoices.includes(EMBEDDED_VOICE_MANIFEST.af_heart.file) ||
-    packageVoices.join("\n") !== manifestVoices.join("\n")
-  ) {
-    throw new Error(
-      `kokoro-js 1.2.1 must ship exactly ${EXPECTED_VOICE_COUNT} manifest-matched voices including af_heart.bin`,
-    );
-  }
-
-  for (const name of Object.keys(EMBEDDED_VOICE_MANIFEST) as EmbeddedVoiceName[]) {
-    const entry = EMBEDDED_VOICE_MANIFEST[name];
-    const bytes = await Bun.file(resolve(VOICE_DIRECTORY, entry.file)).arrayBuffer();
-    const actual = Bun.CryptoHasher.hash("sha256", bytes, "hex");
-    if (actual !== entry.sha256) {
-      throw new Error(`kokoro-js voice hash mismatch for ${entry.file}`);
-    }
-  }
-}
-
-export async function buildStandalone(): Promise<void> {
+export async function buildStandalone(): Promise<string> {
   assertBunVersion();
-  if (process.platform !== "darwin") {
-    throw new Error(`Standalone builds are supported only on the current macOS host`);
-  }
-  await verifyPinnedVoicePackage();
-  for (const asset of [...NATIVE_ASSETS, ...WASM_ASSETS]) {
-    if (!(await Bun.file(asset).exists())) {
-      throw new Error(`Pinned runtime asset not found: ${asset}`);
-    }
-  }
-  await mkdir(DIST_DIRECTORY, { recursive: true });
+  await verifyPinnedPhonemizerBundle(ROOT_DIRECTORY);
+  await mkdir(resolve(ROOT_DIRECTORY, "dist"), { recursive: true });
 
   const result = await Bun.build({
-    entrypoints: [
-      resolve(ROOT_DIRECTORY, "index.ts"),
-      ...NATIVE_ASSETS,
-    ],
-    compile: { outfile: BINARY_PATH },
-    loader: { ".node": "file", ".dylib": "file", ".wasm": "file" },
+    entrypoints: [resolve(ROOT_DIRECTORY, "index.ts")],
+    compile: {
+      outfile: BINARY_PATH,
+      autoloadBunfig: false,
+      autoloadDotenv: false,
+      autoloadPackageJson: false,
+      autoloadTsconfig: false,
+    },
     minify: true,
-    naming: { asset: "[name].[ext]" },
     plugins: [
       {
         name: "omit-unused-sharp",
@@ -109,20 +56,16 @@ export async function buildStandalone(): Promise<void> {
     ],
     target: "bun",
   });
-
   if (!result.success) {
     throw new AggregateError(result.logs, "Standalone compilation failed");
   }
-
-  const manifest = Object.fromEntries(
-    Object.entries(EMBEDDED_VOICE_MANIFEST).map(([name, entry]) => [
-      name,
-      { file: entry.file, sha256: entry.sha256 },
-    ]),
-  );
-  await Bun.write(MANIFEST_PATH, `${JSON.stringify(manifest, null, 2)}\n`);
+  if (result.outputs.length !== 1) {
+    throw new Error(
+      `Native helper must compile to one executable; found ${result.outputs.length} outputs`,
+    );
+  }
+  if (process.platform !== "win32") await chmod(BINARY_PATH, 0o755);
+  return BINARY_PATH;
 }
 
-if (import.meta.main) {
-  await buildStandalone();
-}
+if (import.meta.main) await buildStandalone();

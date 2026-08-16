@@ -1,87 +1,73 @@
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { lstat, readdir } from "node:fs/promises";
+import { isAbsolute, resolve } from "node:path";
 
-import type { PreparedRuntime } from "./backend";
+import { resolveRuntimeTarget } from "./backend";
 
 export const ADDON_NAME = "onnxruntime_binding.node";
-export const DYLIB_NAME = "libonnxruntime.1.21.0.dylib";
-const BINDING_PATH_VARIABLE = "KOKORO_ONNX_BINDING_PATH";
+export const ONNX_BINDING_PATH_SYMBOL = Symbol.for(
+  "llm-now-kokoro.onnx-binding-path",
+);
 
-type EmbeddedAsset = Blob | Uint8Array;
+interface NativeRuntimeDependencies {
+  architecture?: NodeJS.Architecture;
+  inspectRegularFile?: (path: string) => Promise<boolean>;
+  listEntries?: (path: string) => Promise<string[]>;
+  platform?: NodeJS.Platform;
+  setBindingPath?: (path: string) => void;
+}
 
-export interface NativeRuntimeDependencies {
-  makeTempDirectory?: () => Promise<string>;
-  readAsset?: (path: string) => Promise<EmbeddedAsset>;
-  writeAsset?: (path: string, asset: EmbeddedAsset) => Promise<void>;
-  removeDirectory?: (directory: string) => Promise<void>;
-  getBindingPath?: () => string | undefined;
-  setBindingPath?: (path: string | undefined) => void;
+export interface NativeRuntime {
+  addonPath: string;
+  libraryPath: string;
+  root: string;
+  target: string;
 }
 
 export async function prepareNativeRuntime(
+  packRoot = process.cwd(),
   dependencies: NativeRuntimeDependencies = {},
-): Promise<PreparedRuntime> {
-  const makeTempDirectory =
-    dependencies.makeTempDirectory ??
-    (() => mkdtemp(join(tmpdir(), "kokoro-cli-onnx-")));
-  const readAsset =
-    dependencies.readAsset ?? readEmbeddedAsset;
-  const writeAsset =
-    dependencies.writeAsset ??
-    (async (path: string, asset: EmbeddedAsset) => {
-      await Bun.write(path, asset);
-    });
-  const removeDirectory =
-    dependencies.removeDirectory ??
-    ((directory: string) => rm(directory, { recursive: true, force: true }));
-  const getBindingPath =
-    dependencies.getBindingPath ?? (() => process.env[BINDING_PATH_VARIABLE]);
-  const setBindingPath =
-    dependencies.setBindingPath ??
-    ((path: string | undefined) => {
-      if (path === undefined) {
-        delete process.env[BINDING_PATH_VARIABLE];
-      } else {
-        process.env[BINDING_PATH_VARIABLE] = path;
-      }
-    });
+): Promise<NativeRuntime> {
+  if (!isAbsolute(packRoot)) throw new Error("pack-root-not-absolute");
+  const target = resolveRuntimeTarget(
+    dependencies.platform ?? process.platform,
+    dependencies.architecture ?? process.arch,
+  );
+  const root = resolve(packRoot, "runtime/onnx");
+  const addonPath = resolve(root, ADDON_NAME);
+  const libraryPath = resolve(root, target.libraryName);
+  const listEntries = dependencies.listEntries ?? readdir;
+  const inspectRegularFile =
+    dependencies.inspectRegularFile ??
+    (async (path: string) => (await lstat(path)).isFile());
 
-  const previousBindingPath = getBindingPath();
-  const directory = await makeTempDirectory();
-  const addonPath = resolve(directory, ADDON_NAME);
-  let cleaned = false;
-
+  let entries: string[];
   try {
-    await writeAsset(
-      resolve(directory, DYLIB_NAME),
-      await readAsset(DYLIB_NAME),
-    );
-    await writeAsset(addonPath, await readAsset(ADDON_NAME));
-    setBindingPath(addonPath);
-  } catch (error) {
-    setBindingPath(previousBindingPath);
-    await removeDirectory(directory);
-    throw error;
+    entries = (await listEntries(root)).sort();
+  } catch {
+    throw new Error("native-runtime-layout-invalid");
+  }
+  const expected = [ADDON_NAME, target.libraryName].sort();
+  if (entries.join("\n") !== expected.join("\n")) {
+    throw new Error("native-runtime-layout-invalid");
+  }
+  try {
+    if (
+      !(await inspectRegularFile(addonPath)) ||
+      !(await inspectRegularFile(libraryPath))
+    ) {
+      throw new Error("invalid");
+    }
+  } catch {
+    throw new Error("native-runtime-layout-invalid");
   }
 
-  return {
-    cleanup: async () => {
-      if (cleaned) return;
-      cleaned = true;
-      setBindingPath(previousBindingPath);
-      await removeDirectory(directory);
-    },
-  };
+  (dependencies.setBindingPath ?? setGlobalBindingPath)(addonPath);
+  return { addonPath, libraryPath, root, target: target.id };
 }
 
-async function readEmbeddedAsset(name: string): Promise<Blob> {
-  const asset = Bun.embeddedFiles.find(
-    (file) => (file as Blob & { name: string }).name === name,
-  );
-  if (!asset) {
-    throw new Error(`Embedded native runtime asset not found: ${name}`);
-  }
-
-  return asset;
+function setGlobalBindingPath(path: string): void {
+  Object.defineProperty(globalThis, ONNX_BINDING_PATH_SYMBOL, {
+    configurable: true,
+    value: path,
+  });
 }

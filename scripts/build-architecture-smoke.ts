@@ -53,7 +53,13 @@ export async function buildArchitectureSmoke(): Promise<void> {
 
   const result = await Bun.build({
     entrypoints: [resolve(import.meta.dir, "architecture-smoke.ts")],
-    compile: { outfile: ARCHITECTURE_HELPER_PATH },
+    compile: {
+      outfile: ARCHITECTURE_HELPER_PATH,
+      autoloadBunfig: false,
+      autoloadDotenv: false,
+      autoloadPackageJson: false,
+      autoloadTsconfig: false,
+    },
     minify: true,
     plugins: [
       {

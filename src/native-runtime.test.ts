@@ -1,67 +1,103 @@
-import { expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
-import { prepareNativeRuntime } from "./native-runtime";
+import {
+  ADDON_NAME,
+  ONNX_BINDING_PATH_SYMBOL,
+  prepareNativeRuntime,
+} from "./native-runtime";
 
-test("removes the unique native directory when materialization fails", async () => {
-  const removed: string[] = [];
-  let writes = 0;
+describe("native ONNX sidecar resolution", () => {
+  test.each([
+    ["darwin", "x64", "libonnxruntime.1.21.0.dylib"],
+    ["darwin", "arm64", "libonnxruntime.1.21.0.dylib"],
+    ["linux", "x64", "libonnxruntime.so.1"],
+    ["linux", "arm64", "libonnxruntime.so.1"],
+    ["win32", "x64", "onnxruntime.dll"],
+  ] as const)("selects only %s-%s sidecars", async (platform, architecture, library) => {
+    const assigned: string[] = [];
+    const result = await prepareNativeRuntime("/packs/space ü", {
+      platform,
+      architecture,
+      listEntries: async () => [library, ADDON_NAME],
+      inspectRegularFile: async () => true,
+      setBindingPath: (path) => assigned.push(path),
+    });
 
-  await expect(
-    prepareNativeRuntime({
-      makeTempDirectory: async () => "/tmp/kokoro-cli-onnx-test",
-      readAsset: async () => new Uint8Array([1, 2, 3]),
-      writeAsset: async () => {
-        writes += 1;
-        if (writes === 2) {
-          throw new Error("forced addon write failure");
-        }
-      },
-      removeDirectory: async (directory) => {
-        removed.push(directory);
-      },
-    }),
-  ).rejects.toThrow("forced addon write failure");
-
-  expect(removed).toEqual(["/tmp/kokoro-cli-onnx-test"]);
-});
-
-test("hands off an absolute addon path and cleans it after a consumer failure", async () => {
-  const written: string[] = [];
-  const removed: string[] = [];
-  const environment: Record<string, string | undefined> = {};
-  const runtime = await prepareNativeRuntime({
-    makeTempDirectory: async () => "/tmp/kokoro-cli-onnx-test",
-    readAsset: async () => new Uint8Array([1, 2, 3]),
-    writeAsset: async (path) => {
-      written.push(path);
-    },
-    removeDirectory: async (directory) => {
-      removed.push(directory);
-    },
-    getBindingPath: () => environment.KOKORO_ONNX_BINDING_PATH,
-    setBindingPath: (path) => {
-      environment.KOKORO_ONNX_BINDING_PATH = path;
-    },
+    expect(result).toEqual({
+      addonPath: `/packs/space ü/runtime/onnx/${ADDON_NAME}`,
+      libraryPath: `/packs/space ü/runtime/onnx/${library}`,
+      root: "/packs/space ü/runtime/onnx",
+      target: `${platform}-${architecture}`,
+    });
+    expect(assigned).toEqual([result.addonPath]);
   });
 
-  expect(written).toEqual([
-    "/tmp/kokoro-cli-onnx-test/libonnxruntime.1.21.0.dylib",
-    "/tmp/kokoro-cli-onnx-test/onnxruntime_binding.node",
-  ]);
-  expect(environment.KOKORO_ONNX_BINDING_PATH).toBe(
-    "/tmp/kokoro-cli-onnx-test/onnxruntime_binding.node",
-  );
+  test("rejects wrong-target, CUDA, DirectML, or extra sidecars", async () => {
+    for (const unexpected of [
+      "onnxruntime.dll",
+      "libonnxruntime_providers_cuda.so",
+      "onnxruntime_providers_dml.dll",
+      "darwin-x64",
+    ]) {
+      await expect(
+        prepareNativeRuntime("/pack", {
+          platform: "linux",
+          architecture: "arm64",
+          listEntries: async () => [
+            ADDON_NAME,
+            "libonnxruntime.so.1",
+            unexpected,
+          ],
+          inspectRegularFile: async () => true,
+        }),
+      ).rejects.toThrow("native-runtime-layout-invalid");
+    }
+  });
 
-  await expect(
-    (async () => {
-      try {
-        throw new Error("forced inference failure");
-      } finally {
-        await runtime.cleanup();
-      }
-    })(),
-  ).rejects.toThrow("forced inference failure");
+  test("ignores a hostile legacy environment loader value", async () => {
+    const previous = process.env.KOKORO_ONNX_BINDING_PATH;
+    process.env.KOKORO_ONNX_BINDING_PATH = "/hostile/answer-bearing/path";
+    try {
+      await prepareNativeRuntime("/verified", {
+        platform: "darwin",
+        architecture: "arm64",
+        listEntries: async () => [
+          ADDON_NAME,
+          "libonnxruntime.1.21.0.dylib",
+        ],
+        inspectRegularFile: async () => true,
+      });
+      expect(
+        (globalThis as typeof globalThis & Record<symbol, unknown>)[
+          ONNX_BINDING_PATH_SYMBOL
+        ],
+      ).toBe("/verified/runtime/onnx/onnxruntime_binding.node");
+    } finally {
+      if (previous === undefined) delete process.env.KOKORO_ONNX_BINDING_PATH;
+      else process.env.KOKORO_ONNX_BINDING_PATH = previous;
+    }
+  });
 
-  expect(environment.KOKORO_ONNX_BINDING_PATH).toBeUndefined();
-  expect(removed).toEqual(["/tmp/kokoro-cli-onnx-test"]);
+  test("performs no extraction or temporary-file writes", async () => {
+    const calls: string[] = [];
+    await prepareNativeRuntime("/read-only-pack", {
+      platform: "win32",
+      architecture: "x64",
+      listEntries: async (path) => {
+        calls.push(`list:${path}`);
+        return [ADDON_NAME, "onnxruntime.dll"];
+      },
+      inspectRegularFile: async (path) => {
+        calls.push(`inspect:${path}`);
+        return true;
+      },
+      setBindingPath: (path) => calls.push(`bind:${path}`),
+    });
+    expect(calls).toEqual([
+      "list:/read-only-pack/runtime/onnx",
+      "inspect:/read-only-pack/runtime/onnx/onnxruntime_binding.node",
+      "inspect:/read-only-pack/runtime/onnx/onnxruntime.dll",
+      "bind:/read-only-pack/runtime/onnx/onnxruntime_binding.node",
+    ]);
+  });
 });

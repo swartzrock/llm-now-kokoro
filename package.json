@@ -13,15 +13,12 @@
     "test": "bun test",
     "typecheck": "bun ./node_modules/typescript/bin/tsc --noEmit",
     "smoke:architecture:prepare": "bun scripts/prepare-architecture-smoke.ts",
-    "smoke:architecture": "bun scripts/run-architecture-smoke.ts",
-    "smoke:model-cache": "KOKORO_MODEL_CACHE_TEST=1 bun test --timeout 300000 tests/model-cache.integration.test.ts",
-    "smoke:standalone": "KOKORO_STANDALONE_TEST=1 bun test --timeout 600000 tests/standalone.integration.test.ts"
+    "smoke:architecture": "bun scripts/run-architecture-smoke.ts"
   },
   "dependencies": {
     "@huggingface/transformers": "3.5.1",
     "kokoro-js": "1.2.1",
-    "onnxruntime-node": "1.21.0",
-    "onnxruntime-web": "1.21.0"
+    "onnxruntime-node": "1.21.0"
   },
   "devDependencies": {
     "@types/bun": "1.3.14",

@@ -1,24 +1,24 @@
 diff --git a/dist/transformers.node.mjs b/dist/transformers.node.mjs
-index 2289efb..23adb2b 100644
+index 1fbe4daffed7283a5e7924525d98946adf50b0ec..813909e29280b4e1e3efdd5f010a4e31d86cef94 100644
 --- a/dist/transformers.node.mjs
 +++ b/dist/transformers.node.mjs
-@@ -1,6 +1,9 @@
+@@ -1,6 +1,6 @@
  import * as __WEBPACK_EXTERNAL_MODULE_fs__ from "fs";
  import * as __WEBPACK_EXTERNAL_MODULE_onnxruntime_common_82b39e9f__ from "onnxruntime-common";
 -import * as __WEBPACK_EXTERNAL_MODULE_onnxruntime_node_6a60201e__ from "onnxruntime-node";
-+let __WEBPACK_EXTERNAL_MODULE_onnxruntime_node_6a60201e__;
-+if (!(Symbol.for('onnxruntime') in globalThis)) {
-+    __WEBPACK_EXTERNAL_MODULE_onnxruntime_node_6a60201e__ = await import("onnxruntime-node");
-+}
++const __WEBPACK_EXTERNAL_MODULE_onnxruntime_node_6a60201e__ = await import("onnxruntime-node");
  import * as __WEBPACK_EXTERNAL_MODULE_path__ from "path";
  import * as __WEBPACK_EXTERNAL_MODULE_sharp__ from "sharp";
  import * as __WEBPACK_EXTERNAL_MODULE_url__ from "url";
-@@ -2330,3 +2333,8 @@
- if (ORT_SYMBOL in globalThis) {
-     // If the JS runtime exposes their own ONNX runtime, use it
-     ONNX = globalThis[ORT_SYMBOL];
-+
-+    if (ONNX?.env?.wasm) {
-+        supportedDevices.push('wasm');
-+        defaultDevices = ['wasm'];
-+    }
+@@ -2326,10 +2326,4 @@ const supportedDevices = [];
+ let defaultDevices;
+ let ONNX;
+-const ORT_SYMBOL = Symbol.for('onnxruntime');
+-
+-if (ORT_SYMBOL in globalThis) {
+-    // If the JS runtime exposes their own ONNX runtime, use it
+-    ONNX = globalThis[ORT_SYMBOL];
+-
+-} else if (_env_js__WEBPACK_IMPORTED_MODULE_0__.apis.IS_NODE_ENV) {
++if (_env_js__WEBPACK_IMPORTED_MODULE_0__.apis.IS_NODE_ENV) {
+     ONNX = onnxruntime_node__WEBPACK_IMPORTED_MODULE_1__["default"] ?? onnxruntime_node__WEBPACK_IMPORTED_MODULE_1__;

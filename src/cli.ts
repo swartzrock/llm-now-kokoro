@@ -45,6 +45,7 @@ export interface HelperDependencies {
     signal: AbortSignal,
   ) => Promise<SynthesizedAudio>;
   play?: (audio: SynthesizedAudio, signal: AbortSignal) => Promise<void>;
+  preflight?: (signal: AbortSignal) => Promise<void>;
   selfTest?: (signal: AbortSignal) => Promise<void>;
   signal?: AbortSignal;
   writeStdout?: (value: string) => void;
@@ -109,6 +110,7 @@ async function speak(
   dependencies: HelperDependencies,
   overallSignal: AbortSignal,
 ): Promise<void> {
+  await (dependencies.preflight ?? unavailablePreflight)(overallSignal);
   const requestBytes = await (
     dependencies.readStdin ?? readBoundedStdin
   )(MAX_REQUEST_BYTES, overallSignal);
@@ -270,6 +272,10 @@ function writeBounded(value: string, write: (value: string) => void): void {
 
 async function unavailableSelfTest(): Promise<never> {
   throw operationFailure("self-test-unavailable");
+}
+
+async function unavailablePreflight(): Promise<never> {
+  throw operationFailure("speech-engine-unavailable");
 }
 
 async function unavailableInspect(): Promise<never> {
