@@ -166,6 +166,7 @@ async function buildPlayer(): Promise<void> {
             "cc",
             "-std=c99",
             "-O2",
+            "-mmacosx-version-min=13.0",
             `-I${includeDirectory}`,
             source,
             "-o",
