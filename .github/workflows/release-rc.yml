@@ -1,0 +1,448 @@
+name: Protected immutable release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      rc_tag:
+        description: Immutable v0.1.0-rc.N tag to create
+        required: true
+        type: string
+      source_sha:
+        description: Reviewed and merged full source commit SHA
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-candidate-${{ inputs.rc_tag }}
+  cancel-in-progress: false
+
+jobs:
+  reviewed-source:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.source_sha }}
+      - name: Require an unused RC tag and merged main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RC_TAG: ${{ inputs.rc_tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          WORKFLOW_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$RC_TAG" =~ ^v0\.1\.0-rc\.[1-9][0-9]*$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$WORKFLOW_SHA" = "$SOURCE_SHA"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          git fetch origin main --depth=1
+          git merge-base --is-ancestor "$SOURCE_SHA" origin/main
+          test "$(gh api "repos/${GITHUB_REPOSITORY}/commits/${SOURCE_SHA}/pulls" --jq '[.[] | select(.merged_at != null and .base.ref == "main")] | length')" -ge 1
+          if git ls-remote --exit-code --tags origin "refs/tags/$RC_TAG"; then
+            echo "RC tag already exists; release assets are immutable" >&2
+            exit 1
+          fi
+          if gh release view "$RC_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "RC release already exists; replacement is forbidden" >&2
+            exit 1
+          fi
+
+  unsigned-build:
+    needs: reviewed-source
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-x64
+            runner: macos-15-intel
+            bun-url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-darwin-x64-baseline.zip
+            bun-sha256: 3e35ad6f53971a9834bf9e6786e2adf72b5f1921cc9a9c5fde073d2972944076
+          - target: darwin-arm64
+            runner: macos-15
+            bun-url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-darwin-aarch64.zip
+            bun-sha256: d8b96221828ad6f97ac7ac0ab7e95872341af763001e8803e8267652c2652620
+          - target: linux-x64
+            runner: ubuntu-24.04
+            bun-url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-linux-x64-baseline.zip
+            bun-sha256: a063908ae08b7852ca10939bbdc6ceed3ddabce8fb9402dce83d65d73b36e6c7
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+            bun-url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-linux-aarch64.zip
+            bun-sha256: a27ffb63a8310375836e0d6f668ae17fa8d8d18b88c37c821c65331973a19a3b
+          - target: win32-x64
+            runner: windows-2025
+            bun-url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-windows-x64-baseline.zip
+            bun-sha256: 538f9c846355d9e847b2671bc00c47da4229a0befb24df3282b739770f3b475f
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      KOKORO_EXPECTED_TARGET: ${{ matrix.target }}
+      ONNXRUNTIME_NODE_INSTALL_CUDA: skip
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.source_sha }}
+      - name: Install checksum-verified Bun
+        if: runner.os != 'Windows'
+        run: bash scripts/install-verified-bun.sh "${{ matrix.bun-url }}" "${{ matrix.bun-sha256 }}"
+      - name: Install checksum-verified Bun
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: scripts/install-verified-bun.ps1 "${{ matrix.bun-url }}" "${{ matrix.bun-sha256 }}"
+      - if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - run: bun run release:test
+      - run: bun run release:validate
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          if-no-files-found: error
+          name: unsigned-${{ matrix.target }}
+          path: dist/release/${{ matrix.target }}
+      - if: matrix.target == 'linux-x64'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          if-no-files-found: error
+          name: unsigned-shared
+          path: dist/release/shared
+
+  unsigned-gate:
+    needs: unsigned-build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.source_sha }}
+      - name: Install checksum-verified Bun
+        run: >-
+          bash scripts/install-verified-bun.sh
+          https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-linux-x64-baseline.zip
+          a063908ae08b7852ca10939bbdc6ceed3ddabce8fb9402dce83d65d73b36e6c7
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: unsigned-darwin-x64
+          path: dist/release/darwin-x64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: unsigned-darwin-arm64
+          path: dist/release/darwin-arm64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: unsigned-linux-x64
+          path: dist/release/linux-x64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: unsigned-linux-arm64
+          path: dist/release/linux-arm64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: unsigned-win32-x64
+          path: dist/release/win32-x64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: unsigned-shared
+          path: dist/release/shared
+      - name: Restore canonical release modes lost by artifact transport
+        run: >-
+          bun scripts/restore-release-modes.ts
+          dist/release/darwin-x64
+          dist/release/darwin-arm64
+          dist/release/linux-x64
+          dist/release/linux-arm64
+          dist/release/win32-x64
+          dist/release/shared
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - name: Validate all unsigned contents before any signing identity is available
+        run: bun scripts/validate-collected-release.ts dist/release
+
+  sign-macos:
+    needs: unsigned-gate
+    strategy:
+      matrix:
+        include:
+          - target: darwin-x64
+            runner: macos-15-intel
+            bun-url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-darwin-x64-baseline.zip
+            bun-sha256: 3e35ad6f53971a9834bf9e6786e2adf72b5f1921cc9a9c5fde073d2972944076
+          - target: darwin-arm64
+            runner: macos-15
+            bun-url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-darwin-aarch64.zip
+            bun-sha256: d8b96221828ad6f97ac7ac0ab7e95872341af763001e8803e8267652c2652620
+    runs-on: ${{ matrix.runner }}
+    environment: release-signing
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.source_sha }}
+      - name: Install checksum-verified Bun
+        run: bash scripts/install-verified-bun.sh "${{ matrix.bun-url }}" "${{ matrix.bun-sha256 }}"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: unsigned-${{ matrix.target }}
+          path: dist/release/${{ matrix.target }}
+      - name: Restore canonical release modes lost by artifact transport
+        run: bun scripts/restore-release-modes.ts "dist/release/${{ matrix.target }}"
+      - name: Sign inside-out and notarize build-only submission bundle
+        env:
+          APPLE_DEVELOPER_ID_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
+          APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_DEVELOPER_ID_IDENTITY: ${{ secrets.APPLE_DEVELOPER_ID_IDENTITY }}
+          APPLE_NOTARY_PRIVATE_KEY_BASE64: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY_BASE64 }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER_ID: ${{ secrets.APPLE_NOTARY_ISSUER_ID }}
+          APPLE_NOTARY_TEAM_ID: ${{ secrets.APPLE_NOTARY_TEAM_ID }}
+        run: scripts/sign-macos-release.sh "dist/release/${{ matrix.target }}/assets" "${{ inputs.rc_tag }}" "${{ inputs.source_sha }}" "$(shasum -a 256 bun.lock | awk '{print $1}')"
+      - name: Regenerate manifest from signed bytes
+        run: bun scripts/refresh-signed-release-manifest.ts "dist/release/${{ matrix.target }}" "${{ inputs.source_sha }}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          if-no-files-found: error
+          name: signed-${{ matrix.target }}
+          path: dist/release/${{ matrix.target }}
+
+  sign-windows:
+    needs: unsigned-gate
+    runs-on: windows-2025
+    environment: release-signing
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.source_sha }}
+      - name: Install checksum-verified Bun
+        shell: pwsh
+        run: scripts/install-verified-bun.ps1 https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-windows-x64-baseline.zip 538f9c846355d9e847b2671bc00c47da4229a0befb24df3282b739770f3b475f
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: unsigned-win32-x64
+          path: dist/release/win32-x64
+      - name: Restore canonical release modes lost by artifact transport
+        run: bun scripts/restore-release-modes.ts dist/release/win32-x64
+      - name: Authenticode sign, RFC3161 timestamp, and verify
+        env:
+          WINDOWS_CODESIGN_PFX_BASE64: ${{ secrets.WINDOWS_CODESIGN_PFX_BASE64 }}
+          WINDOWS_CODESIGN_PFX_PASSWORD: ${{ secrets.WINDOWS_CODESIGN_PFX_PASSWORD }}
+          WINDOWS_RFC3161_TIMESTAMP_URL: ${{ secrets.WINDOWS_RFC3161_TIMESTAMP_URL }}
+        shell: pwsh
+        run: |
+          $lock = (Get-FileHash -Algorithm SHA256 bun.lock).Hash.ToLowerInvariant()
+          scripts/sign-windows-release.ps1 dist/release/win32-x64/assets "${{ inputs.rc_tag }}" "${{ inputs.source_sha }}" $lock
+          bun scripts/refresh-signed-release-manifest.ts dist/release/win32-x64 "${{ inputs.source_sha }}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          if-no-files-found: error
+          name: signed-win32-x64
+          path: dist/release/win32-x64
+
+  checksum-linux:
+    needs: unsigned-gate
+    strategy:
+      matrix:
+        target: [linux-x64, linux-arm64]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.source_sha }}
+      - name: Install checksum-verified Bun
+        run: >-
+          bash scripts/install-verified-bun.sh
+          https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-linux-x64-baseline.zip
+          a063908ae08b7852ca10939bbdc6ceed3ddabce8fb9402dce83d65d73b36e6c7
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: unsigned-${{ matrix.target }}
+          path: dist/release/${{ matrix.target }}
+      - name: Restore canonical release modes lost by artifact transport
+        run: bun scripts/restore-release-modes.ts "dist/release/${{ matrix.target }}"
+      - run: bun scripts/refresh-signed-release-manifest.ts "dist/release/${{ matrix.target }}" "${{ inputs.source_sha }}"
+      - run: bun scripts/write-signing-receipt.ts linux-checksum "dist/release/${{ matrix.target }}/assets" "dist/release/${{ matrix.target }}/signing-receipt.json" "${{ inputs.rc_tag }}" "${{ inputs.source_sha }}" "$(sha256sum bun.lock | awk '{print $1}')"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          if-no-files-found: error
+          name: signed-${{ matrix.target }}
+          path: dist/release/${{ matrix.target }}
+
+  publish-immutable-rc:
+    needs: [sign-macos, sign-windows, checksum-linux]
+    runs-on: ubuntu-24.04
+    environment: release-signing
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          ref: ${{ inputs.source_sha }}
+      - name: Install checksum-verified Bun
+        run: >-
+          bash scripts/install-verified-bun.sh
+          https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-linux-x64-baseline.zip
+          a063908ae08b7852ca10939bbdc6ceed3ddabce8fb9402dce83d65d73b36e6c7
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: signed-darwin-x64
+          path: dist/release/darwin-x64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: signed-darwin-arm64
+          path: dist/release/darwin-arm64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: signed-linux-x64
+          path: dist/release/linux-x64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: signed-linux-arm64
+          path: dist/release/linux-arm64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: signed-win32-x64
+          path: dist/release/win32-x64
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: unsigned-shared
+          path: dist/release/shared
+      - name: Restore canonical release modes lost by artifact transport
+        run: >-
+          bun scripts/restore-release-modes.ts
+          dist/release/darwin-x64
+          dist/release/darwin-arm64
+          dist/release/linux-x64
+          dist/release/linux-arm64
+          dist/release/win32-x64
+          dist/release/shared
+      - run: bun install --frozen-lockfile --ignore-scripts
+      - name: Bind shared manifest to the reviewed source commit
+        run: bun scripts/refresh-signed-release-manifest.ts dist/release/shared "${{ inputs.source_sha }}"
+      - name: Generate final hashes only after signing
+        run: bun scripts/generate-release-metadata.ts "${{ inputs.rc_tag }}" "${{ inputs.source_sha }}"
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
+        with:
+          subject-path: dist/release/publish/*
+      - name: Verify attestations and enforce immutable creation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RC_TAG: ${{ inputs.rc_tag }}
+          SOURCE_SHA: ${{ inputs.source_sha }}
+        run: |
+          set -euo pipefail
+          for file in dist/release/publish/*; do
+            gh attestation verify "$file" --repo "$GITHUB_REPOSITORY"
+          done
+          bun scripts/validate-final-release.ts \
+            dist/release \
+            dist/release/publish/llm-now-kokoro-0.1.0-root-manifest.json \
+            verified
+          if gh release view "$RC_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "RC release already exists; replacement is forbidden" >&2
+            exit 1
+          fi
+          gh release create "$RC_TAG" dist/release/publish/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$SOURCE_SHA" \
+            --prerelease \
+            --title "llm-now Kokoro speech pack $RC_TAG" \
+            --notes "Immutable release candidate. Stable promotion is deferred until cross-repository validation."
+
+  verify-public-redownload:
+    needs: publish-immutable-rc
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: darwin-x64
+            runner: macos-15-intel
+            bun-url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-darwin-x64-baseline.zip
+            bun-sha256: 3e35ad6f53971a9834bf9e6786e2adf72b5f1921cc9a9c5fde073d2972944076
+          - target: darwin-arm64
+            runner: macos-15
+            bun-url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-darwin-aarch64.zip
+            bun-sha256: d8b96221828ad6f97ac7ac0ab7e95872341af763001e8803e8267652c2652620
+          - target: linux-x64
+            runner: ubuntu-24.04
+            bun-url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-linux-x64-baseline.zip
+            bun-sha256: a063908ae08b7852ca10939bbdc6ceed3ddabce8fb9402dce83d65d73b36e6c7
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+            bun-url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-linux-aarch64.zip
+            bun-sha256: a27ffb63a8310375836e0d6f668ae17fa8d8d18b88c37c821c65331973a19a3b
+          - target: win32-x64
+            runner: windows-2025
+            bun-url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-windows-x64-baseline.zip
+            bun-sha256: 538f9c846355d9e847b2671bc00c47da4229a0befb24df3282b739770f3b475f
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.source_sha }}
+      - name: Install checksum-verified Bun
+        if: runner.os != 'Windows'
+        run: bash scripts/install-verified-bun.sh "${{ matrix.bun-url }}" "${{ matrix.bun-sha256 }}"
+      - name: Install checksum-verified Bun
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: scripts/install-verified-bun.ps1 "${{ matrix.bun-url }}" "${{ matrix.bun-sha256 }}"
+      - name: Redownload immutable public files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RC_TAG: ${{ inputs.rc_tag }}
+        run: gh release download "$RC_TAG" --repo "$GITHUB_REPOSITORY" --dir public-release
+      - if: runner.os == 'macOS'
+        run: (cd public-release && shasum -a 256 -c SHA256SUMS)
+      - if: runner.os == 'Linux'
+        run: (cd public-release && sha256sum -c SHA256SUMS)
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-Content public-release/SHA256SUMS | ForEach-Object {
+            $parts = $_ -split '  ', 2
+            if ((Get-FileHash -Algorithm SHA256 (Join-Path public-release $parts[1])).Hash.ToLowerInvariant() -ne $parts[0]) { throw "checksum mismatch" }
+          }
+      - if: runner.os == 'macOS'
+        run: |
+          for file in public-release/*-${{ matrix.target }}-helper public-release/*-${{ matrix.target }}-player public-release/*-${{ matrix.target }}-*.node public-release/*-${{ matrix.target }}-*.dylib; do
+            codesign --verify --strict --verbose=2 "$file"
+          done
+          spctl --assess --type execute --verbose=2 public-release/*-${{ matrix.target }}-helper
+          cp public-release/*-${{ matrix.target }}-helper quarantined-helper
+          xattr -w com.apple.quarantine "0081;00000000;GitHub;" quarantined-helper
+          spctl --assess --type execute --verbose=2 quarantined-helper
+      - if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-ChildItem public-release -File | Where-Object { $_.Name -like '*-win32-x64-*' -and $_.Extension -in @('.exe', '.dll', '.node') } | ForEach-Object {
+            $signature = Get-AuthenticodeSignature $_.FullName
+            if ($signature.Status -ne 'Valid' -or -not $signature.TimestampCertificate) { throw "invalid Authenticode signature" }
+          }
+          $originHelper = Join-Path $PWD "origin-marked-helper.exe"
+          Copy-Item (Get-ChildItem public-release/*-win32-x64-helper.exe).FullName $originHelper
+          Set-Content -LiteralPath $originHelper -Stream Zone.Identifier -Value "[ZoneTransfer]`nZoneId=3"
+          $originSignature = Get-AuthenticodeSignature $originHelper
+          if ($originSignature.Status -ne 'Valid' -or -not $originSignature.TimestampCertificate) { throw "origin-marked Authenticode signature invalid" }
+      - name: Verify public attestations
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for file in public-release/*; do
+            gh attestation verify "$file" --repo "$GITHUB_REPOSITORY"
+          done
+        shell: bash
+      - name: Assemble and execute from clean Unicode path
+        run: bun scripts/verify-public-release.ts public-release "${{ matrix.target }}"

@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import type { SupportedRuntimeTarget } from "../src/backend";
 import { resolveRuntimeTarget } from "../src/backend";
 import { verifyLocalModelAssets } from "../src/model-assets";
+import { PROTOCOL_MAJOR } from "../src/protocol";
 import {
   ARCHITECTURE_INSTALL_ROOT,
   buildArchitectureSmoke,
@@ -155,13 +156,17 @@ async function verifyUnsignedInstalledHelper(): Promise<boolean> {
       if (value) hostileEnvironment[name] = value;
     }
   }
-  const info = await invokeHelper(helper, ["info", "--protocol-major", "1"], hostileEnvironment);
+  const info = await invokeHelper(
+    helper,
+    ["info", "--protocol-major", String(PROTOCOL_MAJOR)],
+    hostileEnvironment,
+  );
   if (info.exitCode !== 0 || info.stderr || !info.stdout.endsWith("\n")) {
     throw new Error("unsigned-helper-info-failed");
   }
   const selfTest = await invokeHelper(
     helper,
-    ["self-test", "--protocol-major", "1"],
+    ["self-test", "--protocol-major", String(PROTOCOL_MAJOR)],
     hostileEnvironment,
   );
   if (selfTest.exitCode !== 0 || selfTest.stdout || selfTest.stderr) {

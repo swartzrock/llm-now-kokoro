@@ -1,3 +1,5 @@
+import { extname } from "node:path";
+
 import type { SupportedRuntimeTarget } from "../src/backend";
 import { resolveRuntimeTarget } from "../src/backend";
 import { MODEL_ASSETS } from "../src/model-assets";
@@ -95,7 +97,7 @@ const SHARED_PREFIX = `llm-now-kokoro-${HELPER_VERSION}-shared`;
 export const SHARED_RELEASE_FILES: readonly ReleaseFileInput[] = Object.freeze([
   ...MODEL_ASSETS.map((asset) => ({
     logicalDestination: asset.relativePath,
-    releaseFilename: `${SHARED_PREFIX}-${asset.id}${extension(asset.relativePath)}`,
+    releaseFilename: `${SHARED_PREFIX}-${asset.id}${extname(asset.relativePath)}`,
   })),
   {
     logicalDestination: "protocol/v1/contract.json",
@@ -118,11 +120,6 @@ export const SHARED_RELEASE_FILES: readonly ReleaseFileInput[] = Object.freeze([
     releaseFilename: `${SHARED_PREFIX}-third-party-notices.md`,
   },
 ]);
-
-function extension(path: string): string {
-  const match = /(?:\.[A-Za-z0-9]+)+$/.exec(path);
-  return match?.[0] ?? "";
-}
 
 function targetParts(
   target: SupportedRuntimeTarget,

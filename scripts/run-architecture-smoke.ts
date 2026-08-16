@@ -1,4 +1,5 @@
 import { MAX_DIAGNOSTIC_BYTES } from "../src/limits";
+import { PROTOCOL_MAJOR } from "../src/protocol";
 import {
   ARCHITECTURE_HELPER_PATH,
   ARCHITECTURE_INSTALL_ROOT,
@@ -10,7 +11,11 @@ await buildArchitectureSmoke();
 await runOfflineInferenceSmoke(ARCHITECTURE_INSTALL_ROOT);
 
 const playerMode = process.argv.includes("--play") ? "play" : "check";
-const info = await invokeHelper(["info", "--protocol-major", "1"]);
+const info = await invokeHelper([
+  "info",
+  "--protocol-major",
+  String(PROTOCOL_MAJOR),
+]);
 if (info.stdout === "") {
   throw new Error("Architecture helper returned empty info");
 }
@@ -36,7 +41,7 @@ if (
 
 const operation = playerMode === "play" ? "speak" : "self-test";
 const result = await invokeHelper(
-  [operation, "--protocol-major", "1"],
+  [operation, "--protocol-major", String(PROTOCOL_MAJOR)],
   operation === "speak"
     ? new TextEncoder().encode(
         JSON.stringify({ text: "Native sidecar architecture check." }),

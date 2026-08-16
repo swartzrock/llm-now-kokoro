@@ -9,6 +9,7 @@ import {
 } from "./release-inventory";
 import {
   assertTargetCompatibilityEvidence,
+  compatibilityBlockers,
   inspectOnnxModel,
 } from "./release-validation";
 
@@ -118,6 +119,8 @@ describe("target compatibility evidence", () => {
         },
         ordinaryLoaderPathVerified: true,
         promptFailureVerified: true,
+        realDevicePlaybackVerified: true,
+        reproducibilityVerified: true,
         runnerCpu: "representative generic aarch64",
         runnerOs: "Linux",
         target: "linux-arm64",
@@ -130,6 +133,8 @@ describe("target compatibility evidence", () => {
     ["baselineCpuVerified", false, "baseline-cpu-unverified"],
     ["ordinaryLoaderPathVerified", false, "ordinary-loader-path-unverified"],
     ["promptFailureVerified", false, "audio-prompt-failure-unverified"],
+    ["realDevicePlaybackVerified", false, "real-device-playback-unverified"],
+    ["reproducibilityVerified", false, "reproducibility-unverified"],
   ] as const)("rejects missing %s evidence", (field, value, message) => {
     expect(() =>
       assertTargetCompatibilityEvidence({
@@ -141,6 +146,8 @@ describe("target compatibility evidence", () => {
         nativeDependencies: { declared: [], undeclared: [], unresolved: [] },
         ordinaryLoaderPathVerified: true,
         promptFailureVerified: true,
+        realDevicePlaybackVerified: true,
+        reproducibilityVerified: true,
         runnerCpu: "cpu",
         runnerOs: "os",
         target: "linux-arm64",
@@ -148,4 +155,30 @@ describe("target compatibility evidence", () => {
       }),
     ).toThrow(message);
   });
+
+  test.each([...SUPPORTED_RUNTIME_TARGETS])(
+    "requires real-device playback evidence for %s",
+    (target) => {
+      expect(
+        compatibilityBlockers({
+          audioBackends: target.startsWith("linux-")
+            ? ["alsa", "pulseaudio", "pipewire"]
+            : [],
+          baselineCpuVerified: true,
+          blockedNetworkingVerified: true,
+          bunVersion: "1.3.14",
+          floorVerified: true,
+          nativeDependencies: { declared: [], undeclared: [], unresolved: [] },
+          ordinaryLoaderPathVerified: true,
+          promptFailureVerified: true,
+          realDevicePlaybackVerified: false,
+          reproducibilityVerified: true,
+          runnerCpu: "cpu",
+          runnerOs: "os",
+          target,
+          windowsAppLocalRuntimeApproved: true,
+        }),
+      ).toContain("real-device-playback-unverified");
+    },
+  );
 });

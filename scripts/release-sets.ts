@@ -1,5 +1,5 @@
 import { chmod, copyFile, mkdir, rm } from "node:fs/promises";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 
 import type { SupportedRuntimeTarget } from "../src/backend";
 import type {
@@ -10,6 +10,7 @@ import type {
 import {
   canonicalManifestJson,
   createReleaseManifest,
+  isSafeRelativeReleasePath,
   validateReleaseManifest,
 } from "./release-manifest";
 
@@ -38,14 +39,7 @@ export async function assembleReleaseSet(
 
   for (const file of input.files) {
     const logicalSourcePath = file.sourcePath ?? file.logicalDestination;
-    if (
-      !logicalSourcePath ||
-      isAbsolute(logicalSourcePath) ||
-      logicalSourcePath.includes("\\") ||
-      logicalSourcePath
-        .split("/")
-        .some((component) => component === "" || component === "." || component === "..")
-    ) {
+    if (!isSafeRelativeReleasePath(logicalSourcePath)) {
       throw new Error("unsafe-release-source-path");
     }
     const sourcePath = resolve(

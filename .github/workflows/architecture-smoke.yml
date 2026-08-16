@@ -25,18 +25,23 @@ jobs:
           - target: darwin-x64
             runner: macos-15-intel
             bun-url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-darwin-x64-baseline.zip
+            bun-sha256: 3e35ad6f53971a9834bf9e6786e2adf72b5f1921cc9a9c5fde073d2972944076
           - target: darwin-arm64
             runner: macos-15
             bun-url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-darwin-aarch64.zip
+            bun-sha256: d8b96221828ad6f97ac7ac0ab7e95872341af763001e8803e8267652c2652620
           - target: linux-x64
             runner: ubuntu-24.04
             bun-url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-linux-x64-baseline.zip
+            bun-sha256: a063908ae08b7852ca10939bbdc6ceed3ddabce8fb9402dce83d65d73b36e6c7
           - target: linux-arm64
             runner: ubuntu-24.04-arm
             bun-url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-linux-aarch64.zip
+            bun-sha256: a27ffb63a8310375836e0d6f668ae17fa8d8d18b88c37c821c65331973a19a3b
           - target: win32-x64
             runner: windows-2025
             bun-url: https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-windows-x64-baseline.zip
+            bun-sha256: 538f9c846355d9e847b2671bc00c47da4229a0befb24df3282b739770f3b475f
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
     env:
@@ -44,9 +49,13 @@ jobs:
       ONNXRUNTIME_NODE_INSTALL_CUDA: skip
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with:
-          bun-download-url: ${{ matrix.bun-url }}
+      - name: Install checksum-verified Bun
+        if: runner.os != 'Windows'
+        run: bash scripts/install-verified-bun.sh "${{ matrix.bun-url }}" "${{ matrix.bun-sha256 }}"
+      - name: Install checksum-verified Bun
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: scripts/install-verified-bun.ps1 "${{ matrix.bun-url }}" "${{ matrix.bun-sha256 }}"
       - if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
       - run: bun install --frozen-lockfile --ignore-scripts

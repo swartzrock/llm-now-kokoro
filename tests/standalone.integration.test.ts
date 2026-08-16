@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chmod, cp, mkdir, mkdtemp, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 
 import { assembleReleaseSet, installReleaseSets } from "../scripts/release-sets";
@@ -86,6 +86,5 @@ describe("standalone runtime release assembly", () => {
     });
     expect(await Bun.file(resolve(installRoot, "node_modules")).exists()).toBe(false);
     expect(await Bun.file(resolve(installRoot, "bun")).exists()).toBe(false);
-    await cp(resolve(installRoot, "llm-now-kokoro"), resolve(installRoot, "helper-copy"));
   });
 });

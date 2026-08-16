@@ -25,6 +25,8 @@ export interface TargetCompatibilityEvidence {
   };
   ordinaryLoaderPathVerified: boolean;
   promptFailureVerified: boolean;
+  realDevicePlaybackVerified: boolean;
+  reproducibilityVerified: boolean;
   runnerCpu: string;
   runnerOs: string;
   target: SupportedRuntimeTarget;
@@ -128,6 +130,12 @@ export function compatibilityBlockers(
   }
   if (!evidence.ordinaryLoaderPathVerified) {
     blockers.push("ordinary-loader-path-unverified");
+  }
+  if (!evidence.realDevicePlaybackVerified) {
+    blockers.push("real-device-playback-unverified");
+  }
+  if (!evidence.reproducibilityVerified) {
+    blockers.push("reproducibility-unverified");
   }
   if (evidence.nativeDependencies.unresolved.length > 0) {
     blockers.push("unresolved-native-dependency");

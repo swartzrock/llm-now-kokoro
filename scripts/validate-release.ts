@@ -1,11 +1,11 @@
 import { resolve } from "node:path";
 
 import { resolveRuntimeTarget } from "../src/backend";
-import type { ReleaseManifest } from "./release-manifest";
+import { HELPER_VERSION } from "../src/protocol";
 import {
   assertFirstTargetSizeBudget,
-  canonicalManifestJson,
   manifestBytes,
+  readCanonicalReleaseManifest,
   validateReleaseManifest,
 } from "./release-manifest";
 import {
@@ -21,15 +21,18 @@ import {
 const releaseRoot = resolve(import.meta.dir, "../dist/release");
 const target = resolveRuntimeTarget().id;
 
-const runtime = await readManifest(
+const runtime = await readCanonicalReleaseManifest(
   resolve(
     releaseRoot,
     target,
-    `llm-now-kokoro-0.1.0-${target}-manifest.json`,
+    `llm-now-kokoro-${HELPER_VERSION}-${target}-manifest.json`,
   ),
 );
-const shared = await readManifest(
-  resolve(releaseRoot, "shared/llm-now-kokoro-0.1.0-shared-manifest.json"),
+const shared = await readCanonicalReleaseManifest(
+  resolve(
+    releaseRoot,
+    `shared/llm-now-kokoro-${HELPER_VERSION}-shared-manifest.json`,
+  ),
 );
 if (runtime.target !== target) throw new Error("release-runner-target-mismatch");
 
@@ -74,12 +77,3 @@ console.log(
     target,
   }),
 );
-
-async function readManifest(path: string): Promise<ReleaseManifest> {
-  const source = await Bun.file(path).text();
-  const manifest = JSON.parse(source) as ReleaseManifest;
-  if (source !== canonicalManifestJson(manifest)) {
-    throw new Error("release-manifest-not-canonical");
-  }
-  return manifest;
-}

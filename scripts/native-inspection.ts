@@ -54,6 +54,14 @@ export async function inspectNativeRelease(
       .filter((file) => file.logicalDestination.startsWith("runtime/onnx/"))
       .map((file) => basename(file.logicalDestination).toLowerCase()),
   );
+  const declaredLinuxPaths = new Map(
+    manifest.files
+      .filter((file) => file.logicalDestination.startsWith("runtime/onnx/"))
+      .map((file) => [
+        basename(file.logicalDestination).toLowerCase(),
+        resolve(installRoot, file.logicalDestination),
+      ]),
+  );
 
   let inspection: Pick<
     NativeInspectionReport,
@@ -75,6 +83,7 @@ export async function inspectNativeRelease(
     inspection = await inspectLinux(
       binaryPaths,
       declaredNames,
+      declaredLinuxPaths,
       manifest.target,
       run,
     );
@@ -91,6 +100,7 @@ export async function inspectNativeRelease(
       "linux-audio-backends=unverified-on-real-device",
     );
   }
+  inspection.floorDetails.push("real-device-playback=unverified");
   return {
     // Policy tests prove that only the declared local envelope is accepted;
     // they do not prove that real ALSA, PulseAudio, or PipeWire devices work.
@@ -99,6 +109,8 @@ export async function inspectNativeRelease(
     bunVersion: Bun.version,
     inspectedCommands: commands,
     promptFailureVerified,
+    realDevicePlaybackVerified: false,
+    reproducibilityVerified: false,
     runnerCpu: cpus()[0]?.model ?? "",
     runnerOs: `${osType()} ${osRelease()}`,
     target: manifest.target,
@@ -211,6 +223,7 @@ async function inspectDarwin(
 async function inspectLinux(
   binaryPaths: string[],
   declaredNames: Set<string>,
+  declaredPaths: ReadonlyMap<string, string>,
   target: SupportedRuntimeTarget,
   run: (command: string[]) => Promise<CommandResult>,
 ): Promise<Pick<
@@ -236,12 +249,12 @@ async function inspectLinux(
       unresolved.push(`${basename(path)}:dependency-inspection`);
     }
     unresolved.push(...parseLddMissing(lddText));
-    for (const dependency of parseLddResolved(lddText)) {
-      const name = dependency.name.toLowerCase();
-      if (name.startsWith("libonnxruntime") && !declaredNames.has(name)) {
-        undeclared.push(dependency.name);
-      }
-    }
+    undeclared.push(
+      ...classifyUndeclaredLinuxDependencies(
+        parseLddResolved(lddText),
+        declaredPaths,
+      ),
+    );
     const symbols = await run(["objdump", "-T", path]);
     if (symbols.exitCode !== 0) {
       unresolved.push(`${basename(path)}:symbol-inspection`);
@@ -255,20 +268,13 @@ async function inspectLinux(
       }
     }
   }
-  const required = target === "linux-x64" ? "2.27" : "2.17";
   const maximum = versions.sort(compareVersions).at(-1);
   const kernel = /^\d+(?:\.\d+)?/.exec(osRelease())?.[0];
-  const kernelVerified = kernel !== undefined && compareVersions(kernel, "5.1") >= 0;
+  const floor = assessLinuxFloor(target, maximum, kernel, false);
   return {
     baselineCpuVerified: target === "linux-arm64",
-    floorDetails: [
-      `maximum-glibc=${maximum ?? "missing"}`,
-      `runner-kernel=${kernel ?? "missing"};minimum=5.1`,
-    ],
-    floorVerified:
-      maximum !== undefined &&
-      compareVersions(maximum, required) <= 0 &&
-      kernelVerified,
+    floorDetails: floor.details,
+    floorVerified: floor.verified,
     nativeDependencies: {
       declared: [...declaredNames].sort(),
       undeclared: [...new Set(undeclared)].sort(),
@@ -295,7 +301,9 @@ async function inspectWindows(
   const unresolved: string[] = [];
   const undeclared: string[] = [];
   const system = /^(?:api-ms-win-.*|advapi32|bcrypt|combase|crypt32|dbghelp|gdi32|imm32|iphlpapi|kernel32|ncrypt|normaliz|ntdll|ole32|oleaut32|rpcrt4|secur32|shell32|shlwapi|ucrtbase|user32|version|winmm|ws2_32)\.dll$/i;
-  let floorVerified = true;
+  const floorDetails: string[] = [];
+  const subsystemVersions: string[] = [];
+  let headersComplete = true;
   for (const path of binaryPaths) {
     const dependencies = await run(["dumpbin", "/dependents", path]);
     if (dependencies.exitCode !== 0) {
@@ -315,14 +323,18 @@ async function inspectWindows(
     const versions = [...headers.stdout.matchAll(/(\d+\.\d+) subsystem version/gi)].map(
       (match) => match[1]!,
     );
-    if (headers.exitCode !== 0 || versions.length === 0 || versions.some((version) => compareVersions(version, "10.0") > 0)) {
-      floorVerified = false;
-    }
+    subsystemVersions.push(...versions);
+    if (headers.exitCode !== 0 || versions.length === 0) headersComplete = false;
+    floorDetails.push(
+      `${basename(path)}:pe-subsystem-version=${versions.join(",") || "missing"}`,
+    );
   }
+  const floor = assessWindowsFloor(subsystemVersions, headersComplete, false);
+  floorDetails.push(...floor.details);
   return {
     baselineCpuVerified: false,
-    floorDetails: ["minimum-windows-build=10.0.17763"],
-    floorVerified,
+    floorDetails,
+    floorVerified: floor.verified,
     nativeDependencies: {
       declared: [...declaredNames].sort(),
       undeclared: [...new Set(undeclared)].sort(),
@@ -353,9 +365,95 @@ export function parseLddResolved(output: string): Array<{ name: string; path: st
   const dependencies: Array<{ name: string; path: string }> = [];
   for (const line of output.split(/\r?\n/)) {
     const match = /^\s*(\S+)\s+=>\s+(\/\S+)/.exec(line);
-    if (match) dependencies.push({ name: match[1]!, path: match[2]! });
+    if (match) {
+      dependencies.push({ name: match[1]!, path: match[2]! });
+      continue;
+    }
+    const direct = /^\s*(\/\S+)\s+\(/.exec(line);
+    if (direct) {
+      dependencies.push({ name: basename(direct[1]!), path: direct[1]! });
+    }
   }
   return dependencies;
+}
+
+const REVIEWED_LINUX_SYSTEM_LIBRARIES = new Set([
+  "ld-linux-aarch64.so.1",
+  "ld-linux-x86-64.so.2",
+  "libatomic.so.1",
+  "libc.so.6",
+  "libdl.so.2",
+  "libgcc_s.so.1",
+  "libm.so.6",
+  "libpthread.so.0",
+  "libresolv.so.2",
+  "librt.so.1",
+  "libstdc++.so.6",
+  "libutil.so.1",
+]);
+
+export function classifyUndeclaredLinuxDependencies(
+  dependencies: readonly { name: string; path: string }[],
+  declaredPaths: ReadonlyMap<string, string>,
+): string[] {
+  const undeclared: string[] = [];
+  for (const dependency of dependencies) {
+    const name = dependency.name.toLowerCase();
+    const path = resolve(dependency.path);
+    const declaredPath = declaredPaths.get(name);
+    if (declaredPath !== undefined && path === resolve(declaredPath)) continue;
+    if (
+      REVIEWED_LINUX_SYSTEM_LIBRARIES.has(name) &&
+      /^\/(?:lib|lib64|usr\/lib)(?:\/|$)/.test(path)
+    ) {
+      continue;
+    }
+    undeclared.push(`${dependency.name} => ${dependency.path}`);
+  }
+  return undeclared;
+}
+
+export function assessLinuxFloor(
+  target: SupportedRuntimeTarget,
+  maximumGlibcVersion: string | undefined,
+  runnerKernel: string | undefined,
+  minimumHostExecutionVerified: boolean,
+): { details: string[]; verified: boolean } {
+  if (target !== "linux-arm64" && target !== "linux-x64") {
+    throw new Error("linux-target-required");
+  }
+  const requiredGlibc = target === "linux-x64" ? "2.27" : "2.17";
+  const glibcCompatible =
+    maximumGlibcVersion !== undefined &&
+    compareVersions(maximumGlibcVersion, requiredGlibc) <= 0;
+  return {
+    details: [
+      `maximum-glibc=${maximumGlibcVersion ?? "missing"}`,
+      `glibc-floor=${requiredGlibc};symbol-compatible=${glibcCompatible}`,
+      `runner-kernel=${runnerKernel ?? "missing"};minimum-host-kernel=5.1;minimum-host-execution=${minimumHostExecutionVerified ? "verified" : "unverified"}`,
+    ],
+    // A newer runner kernel cannot prove that the binary executes on 5.1.
+    verified: glibcCompatible && minimumHostExecutionVerified,
+  };
+}
+
+export function assessWindowsFloor(
+  subsystemVersions: readonly string[],
+  headersComplete: boolean,
+  minimumHostExecutionVerified: boolean,
+): { details: string[]; verified: boolean } {
+  const headersCompatible =
+    headersComplete &&
+    subsystemVersions.length > 0 &&
+    subsystemVersions.every((version) => compareVersions(version, "10.0") <= 0);
+  return {
+    details: [
+      `pe-subsystem-compatible=${headersCompatible}`,
+      `minimum-windows-build=10.0.17763;minimum-host-execution=${minimumHostExecutionVerified ? "verified" : "unverified"}`,
+    ],
+    // PE subsystem 10.0 does not identify or prove Windows build 17763.
+    verified: headersCompatible && minimumHostExecutionVerified,
+  };
 }
 
 export function parseDumpbinDependencies(output: string): string[] {
