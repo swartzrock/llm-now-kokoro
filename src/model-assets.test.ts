@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { relative, resolve } from "node:path";
 
 import {
   MODEL_ASSETS,
@@ -21,16 +22,20 @@ function validFiles() {
   );
 }
 
+function relativeAssetPath(packRoot: string, path: string): string {
+  return relative(packRoot, path).replaceAll("\\", "/");
+}
+
 describe("local model assets", () => {
   test("pins the exact minimal revision, q8 model, and af_heart tree", async () => {
     const files = validFiles();
-    const packRoot = "/packs/Kokoro ü";
+    const packRoot = resolve("/packs/Kokoro ü");
 
     await verifyLocalModelAssets(packRoot, {
       listFiles: async () =>
         MODEL_ASSETS.map((asset) => asset.relativePath.slice("model/".length)),
       inspectFile: async (path) => {
-        const relativePath = path.slice(`${packRoot}/`.length);
+        const relativePath = relativeAssetPath(packRoot, path);
         const file = files.get(relativePath);
         if (!file) throw new Error("missing");
         return file;
@@ -57,10 +62,11 @@ describe("local model assets", () => {
         ...files.get(asset.relativePath)!,
         sha256: "corrupt",
       });
-      const failure = verifyLocalModelAssets("/pack", {
+      const packRoot = resolve("/pack");
+      const failure = verifyLocalModelAssets(packRoot, {
         listFiles: async () =>
           MODEL_ASSETS.map((entry) => entry.relativePath.slice("model/".length)),
-        inspectFile: async (path) => files.get(path.slice("/pack/".length))!,
+        inspectFile: async (path) => files.get(relativeAssetPath(packRoot, path))!,
       });
 
       await expect(failure).rejects.toThrow(`model-asset-invalid:${asset.id}`);
@@ -73,7 +79,7 @@ describe("local model assets", () => {
 
   test("rejects extra voices and unrelated model files", async () => {
     await expect(
-      verifyLocalModelAssets("/pack", {
+      verifyLocalModelAssets(resolve("/pack"), {
         listFiles: async () => [
           ...MODEL_ASSETS.map((asset) =>
             asset.relativePath.slice("model/".length),
@@ -90,11 +96,12 @@ describe("local model assets", () => {
 
 describe("phonemizer inventory", () => {
   test("binds and audits the installed Emscripten payload", async () => {
+    const repositoryRoot = resolve("/repository");
     await verifyPinnedPhonemizerBundle(
-      "/repository",
+      repositoryRoot,
       async (path) => {
         expect(path).toBe(
-          "/repository/node_modules/phonemizer/dist/phonemizer.js",
+          resolve(repositoryRoot, "node_modules/phonemizer/dist/phonemizer.js"),
         );
         return {
           bytes: PHONEMIZER_INVENTORY.bundle.bytes,

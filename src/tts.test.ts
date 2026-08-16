@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { resolve } from "node:path";
 
 import { MAX_AUDIO_SAMPLES, MAX_NON_SPECIAL_TOKENS } from "./limits";
 import {
@@ -83,22 +84,23 @@ function mockDependencies(options: {
 describe("native local-only speech engine", () => {
   test("loads verified files and sidecars before importing a fixed q8 CPU model", async () => {
     const { dependencies, environment, events } = mockDependencies();
+    const packRoot = resolve("/packs/with spaces/ユニコード");
     const engine = await createNativeSpeechEngine(
-      "/packs/with spaces/ユニコード",
+      packRoot,
       dependencies,
     );
 
     expect(events.slice(0, 5)).toEqual([
-      ["verify", "/packs/with spaces/ユニコード"],
-      ["runtime", "/packs/with spaces/ユニコード"],
-      ["player", "/packs/with spaces/ユニコード"],
+      ["verify", packRoot],
+      ["runtime", packRoot],
+      ["player", packRoot],
       ["load"],
       ["tokenizer", "model"],
     ]);
     expect(environment).toEqual({
       allowLocalModels: true,
       allowRemoteModels: false,
-      localModelPath: "/packs/with spaces/ユニコード",
+      localModelPath: packRoot,
       useBrowserCache: false,
       useFSCache: false,
     });
@@ -110,7 +112,7 @@ describe("native local-only speech engine", () => {
     await expect(provider("af_bella")).rejects.toThrow("unsupported-voice");
     expect(events).toContainEqual([
       "voice",
-      "/packs/with spaces/ユニコード/model/voices/af_heart.bin",
+      resolve(packRoot, "model/voices/af_heart.bin"),
     ]);
 
     const analysis = await engine.inspectText("Hello", signal);

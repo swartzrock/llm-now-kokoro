@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { resolve } from "node:path";
 
 import { MAX_DIAGNOSTIC_BYTES } from "./limits";
 import {
@@ -9,7 +10,11 @@ import {
 } from "./playback";
 import { operationFailure } from "./result";
 
-const packRoot = "/packs/with spaces/ユニコード";
+const packRoot = resolve("/packs/with spaces/ユニコード");
+const runtimeRoot = resolve(packRoot, "runtime");
+const playerPath = resolve(runtimeRoot, "llm-now-kokoro-player");
+const linuxRuntimeRoot = resolve("/run/user/501");
+const pulseSocket = resolve(linuxRuntimeRoot, "pulse/native");
 const signal = new AbortController().signal;
 
 function canonicalWav(sampleCount = 2): {
@@ -59,7 +64,7 @@ function baseDependencies(
     access: async () => {},
     canonicalize: async (path) => path,
     inspect: async (path) =>
-      path === packRoot || path === `${packRoot}/runtime`
+      path === packRoot || path === runtimeRoot
         ? metadata("directory")
         : metadata("file"),
     ...overrides,
@@ -107,7 +112,7 @@ describe("bundled playback", () => {
     }));
 
     expect(command).toEqual([
-      `${packRoot}/runtime/llm-now-kokoro-player`,
+      playerPath,
       "--check",
     ]);
     expect(spawnOptions).toEqual({
@@ -190,7 +195,7 @@ describe("bundled playback", () => {
   test("rejects missing, linked, or non-executable players before spawn", async () => {
     await expect(verifyBundledPlayer(packRoot, baseDependencies({
       inspect: async (path) => {
-        if (path === packRoot || path === `${packRoot}/runtime`) {
+        if (path === packRoot || path === runtimeRoot) {
           return metadata("directory");
         }
         throw new Error("missing");
@@ -206,7 +211,7 @@ describe("bundled playback", () => {
     await expect(verifyBundledPlayer(packRoot, baseDependencies({
       inspect: async (path) => ({
         ...metadata(
-          path === packRoot || path === `${packRoot}/runtime`
+          path === packRoot || path === runtimeRoot
             ? "directory"
             : "file",
         ),
@@ -217,11 +222,11 @@ describe("bundled playback", () => {
     await expect(verifyBundledPlayer(packRoot, baseDependencies({
       inspect: async (path) => ({
         ...metadata(
-          path === packRoot || path === `${packRoot}/runtime`
+          path === packRoot || path === runtimeRoot
             ? "directory"
             : "file",
         ),
-        isSymbolicLink: () => path === `${packRoot}/runtime`,
+        isSymbolicLink: () => path === runtimeRoot,
       }),
     }))).rejects.toThrow("player-unavailable");
   });
@@ -327,8 +332,8 @@ describe("bundled playback", () => {
     const environment = {
       PATH: "/hostile",
       ALSA_CONFIG_PATH: "/tmp/hostile",
-      XDG_RUNTIME_DIR: "/run/user/501",
-      PULSE_SERVER: "unix:/run/user/501/pulse/native",
+      XDG_RUNTIME_DIR: linuxRuntimeRoot,
+      PULSE_SERVER: `unix:${pulseSocket}`,
       PIPEWIRE_REMOTE: "pipewire-0",
     };
     await playAudio(canonicalWav(), packRoot, signal, {}, baseDependencies({
@@ -338,7 +343,7 @@ describe("bundled playback", () => {
       inspect: async (path) => {
         if (
           path === packRoot ||
-          path === `${packRoot}/runtime` ||
+          path === runtimeRoot ||
           path === environment.XDG_RUNTIME_DIR
         ) {
           return metadata("directory");
@@ -359,19 +364,19 @@ describe("bundled playback", () => {
     }));
     expect(childEnvironment).toEqual({
       LANG: "C.UTF-8",
-      XDG_RUNTIME_DIR: "/run/user/501",
-      PULSE_SERVER: "unix:/run/user/501/pulse/native",
+      XDG_RUNTIME_DIR: linuxRuntimeRoot,
+      PULSE_SERVER: `unix:${pulseSocket}`,
       PIPEWIRE_REMOTE: "pipewire-0",
     });
   });
 
   test.each([
     { XDG_RUNTIME_DIR: "relative", PULSE_SERVER: "tcp:remote:4713" },
-    { XDG_RUNTIME_DIR: "/run/user/501", PULSE_SERVER: "tcp:remote:4713" },
-    { XDG_RUNTIME_DIR: "/run/user/501", PIPEWIRE_REMOTE: "../remote" },
+    { XDG_RUNTIME_DIR: linuxRuntimeRoot, PULSE_SERVER: "tcp:remote:4713" },
+    { XDG_RUNTIME_DIR: linuxRuntimeRoot, PIPEWIRE_REMOTE: "../remote" },
     {
-      XDG_RUNTIME_DIR: "/run/user/501",
-      PULSE_SERVER: "unix:/run/user/502/pulse/native",
+      XDG_RUNTIME_DIR: linuxRuntimeRoot,
+      PULSE_SERVER: `unix:${resolve("/run/user/502/pulse/native")}`,
     },
   ])("rejects non-local Linux audio envelope %#", async (environment) => {
     await expect(playAudio(canonicalWav(), packRoot, signal, {}, baseDependencies({
@@ -380,8 +385,8 @@ describe("bundled playback", () => {
       getUid: () => 501,
       inspect: async (path) =>
         path === packRoot ||
-        path === `${packRoot}/runtime` ||
-        path === "/run/user/501"
+        path === runtimeRoot ||
+        path === linuxRuntimeRoot
           ? metadata("directory")
           : path.includes("llm-now-kokoro-player")
             ? metadata("file")
@@ -396,16 +401,18 @@ describe("bundled playback", () => {
     await expect(playAudio(canonicalWav(), packRoot, signal, {}, baseDependencies({
       platform: "linux",
       environment: {
-        XDG_RUNTIME_DIR: "/run/user/501",
-        PULSE_SERVER: "unix:/run/user/501/link/native",
+        XDG_RUNTIME_DIR: linuxRuntimeRoot,
+        PULSE_SERVER: `unix:${resolve(linuxRuntimeRoot, "link/native")}`,
       },
       getUid: () => 501,
       canonicalize: async (path) =>
-        path.endsWith("/link/native") ? "/tmp/attacker/native" : path,
+        path === resolve(linuxRuntimeRoot, "link/native")
+          ? resolve("/tmp/attacker/native")
+          : path,
       inspect: async (path) =>
         path === packRoot ||
-        path === `${packRoot}/runtime` ||
-        path === "/run/user/501"
+        path === runtimeRoot ||
+        path === linuxRuntimeRoot
           ? metadata("directory")
           : path.includes("llm-now-kokoro-player")
             ? metadata("file")
@@ -421,18 +428,18 @@ describe("bundled playback", () => {
       await expect(playAudio(canonicalWav(), packRoot, signal, {}, baseDependencies({
         platform: "linux",
         environment: {
-          XDG_RUNTIME_DIR: "/run/user/501",
-          PULSE_SERVER: "unix:/run/user/501/pulse/native",
+          XDG_RUNTIME_DIR: linuxRuntimeRoot,
+          PULSE_SERVER: `unix:${pulseSocket}`,
         },
         getUid: () => 501,
         inspect: async (path) => {
-          if (path === "/run/user/501") {
+          if (path === linuxRuntimeRoot) {
             return unsafePath === "runtime"
               ? { ...metadata("directory"), mode: 0o722 }
               : metadata("directory");
           }
           if (path.includes("llm-now-kokoro-player")) return metadata("file");
-          if (path === packRoot || path === `${packRoot}/runtime`) {
+          if (path === packRoot || path === runtimeRoot) {
             return metadata("directory");
           }
           return metadata("socket", unsafePath === "socket" ? 502 : 501);

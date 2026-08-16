@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { resolve } from "node:path";
 
 import {
   ADDON_NAME,
@@ -15,7 +16,9 @@ describe("native ONNX sidecar resolution", () => {
     ["win32", "x64", "onnxruntime.dll"],
   ] as const)("selects only %s-%s sidecars", async (platform, architecture, library) => {
     const assigned: string[] = [];
-    const result = await prepareNativeRuntime("/packs/space ü", {
+    const packRoot = resolve("/packs/space ü");
+    const runtimeRoot = resolve(packRoot, "runtime/onnx");
+    const result = await prepareNativeRuntime(packRoot, {
       platform,
       architecture,
       listEntries: async () => [library, ADDON_NAME],
@@ -24,9 +27,9 @@ describe("native ONNX sidecar resolution", () => {
     });
 
     expect(result).toEqual({
-      addonPath: `/packs/space ü/runtime/onnx/${ADDON_NAME}`,
-      libraryPath: `/packs/space ü/runtime/onnx/${library}`,
-      root: "/packs/space ü/runtime/onnx",
+      addonPath: resolve(runtimeRoot, ADDON_NAME),
+      libraryPath: resolve(runtimeRoot, library),
+      root: runtimeRoot,
       target: `${platform}-${architecture}`,
     });
     expect(assigned).toEqual([result.addonPath]);
@@ -58,7 +61,8 @@ describe("native ONNX sidecar resolution", () => {
     const previous = process.env.KOKORO_ONNX_BINDING_PATH;
     process.env.KOKORO_ONNX_BINDING_PATH = "/hostile/answer-bearing/path";
     try {
-      await prepareNativeRuntime("/verified", {
+      const packRoot = resolve("/verified");
+      await prepareNativeRuntime(packRoot, {
         platform: "darwin",
         architecture: "arm64",
         listEntries: async () => [
@@ -71,7 +75,7 @@ describe("native ONNX sidecar resolution", () => {
         (globalThis as typeof globalThis & Record<symbol, unknown>)[
           ONNX_BINDING_PATH_SYMBOL
         ],
-      ).toBe("/verified/runtime/onnx/onnxruntime_binding.node");
+      ).toBe(resolve(packRoot, "runtime/onnx/onnxruntime_binding.node"));
     } finally {
       if (previous === undefined) delete process.env.KOKORO_ONNX_BINDING_PATH;
       else process.env.KOKORO_ONNX_BINDING_PATH = previous;
@@ -80,7 +84,9 @@ describe("native ONNX sidecar resolution", () => {
 
   test("performs no extraction or temporary-file writes", async () => {
     const calls: string[] = [];
-    await prepareNativeRuntime("/read-only-pack", {
+    const packRoot = resolve("/read-only-pack");
+    const runtimeRoot = resolve(packRoot, "runtime/onnx");
+    await prepareNativeRuntime(packRoot, {
       platform: "win32",
       architecture: "x64",
       listEntries: async (path) => {
@@ -94,10 +100,10 @@ describe("native ONNX sidecar resolution", () => {
       setBindingPath: (path) => calls.push(`bind:${path}`),
     });
     expect(calls).toEqual([
-      "list:/read-only-pack/runtime/onnx",
-      "inspect:/read-only-pack/runtime/onnx/onnxruntime_binding.node",
-      "inspect:/read-only-pack/runtime/onnx/onnxruntime.dll",
-      "bind:/read-only-pack/runtime/onnx/onnxruntime_binding.node",
+      `list:${runtimeRoot}`,
+      `inspect:${resolve(runtimeRoot, "onnxruntime_binding.node")}`,
+      `inspect:${resolve(runtimeRoot, "onnxruntime.dll")}`,
+      `bind:${resolve(runtimeRoot, "onnxruntime_binding.node")}`,
     ]);
   });
 });
