@@ -16,6 +16,7 @@ import {
 
 const WAV_HEADER_BYTES = 44;
 export const MAX_WAV_BYTES = WAV_HEADER_BYTES + MAX_AUDIO_SAMPLES * 4;
+const PLAYER_WRITE_CHUNK_BYTES = 64 * 1024;
 const TERMINATION_GRACE_MS = 250;
 const HARD_TERMINATION_GRACE_MS = 1_000;
 
@@ -356,7 +357,10 @@ async function writeAudio(input: PlaybackInput, bytes: Uint8Array): Promise<void
   let offset = 0;
   try {
     while (offset < bytes.byteLength) {
-      const remaining = bytes.subarray(offset);
+      const remaining = bytes.subarray(
+        offset,
+        Math.min(offset + PLAYER_WRITE_CHUNK_BYTES, bytes.byteLength),
+      );
       const accepted = await input.write(remaining);
       const count = accepted === undefined ? remaining.byteLength : accepted;
       if (!Number.isSafeInteger(count) || count <= 0 || count > remaining.byteLength) {

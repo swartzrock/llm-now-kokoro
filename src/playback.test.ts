@@ -165,6 +165,39 @@ describe("bundled playback", () => {
     expect(events.at(-1)).toBe("end");
   });
 
+  test("caps each player stdin write at 64 KiB", async () => {
+    const audio = canonicalWav(20_000);
+    const writes: number[] = [];
+
+    await playAudio(audio, packRoot, signal, {}, baseDependencies({
+      spawn: () => {
+        let resolveExit: (code: number) => void = () => {};
+        const exited = new Promise<number>((resolve) => {
+          resolveExit = resolve;
+        });
+        return {
+          exited,
+          kill: () => resolveExit(143),
+          stdin: {
+            write: (bytes) => {
+              writes.push(bytes.byteLength);
+              return bytes.byteLength;
+            },
+            end: () => resolveExit(0),
+          },
+          stdout: closedStream(),
+          stderr: closedStream(),
+        };
+      },
+    }));
+
+    expect(writes.length).toBeGreaterThan(1);
+    expect(Math.max(...writes)).toBe(64 * 1024);
+    expect(writes.reduce((total, length) => total + length, 0)).toBe(
+      audio.bytes.byteLength,
+    );
+  });
+
   test.each([
     ["format", 20, 1],
     ["sample rate", 24, 48_000],
