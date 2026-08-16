@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "contractVersion": "1.0.0",
+  "protocolMajor": 1,
+  "visibility": "internal",
+  "operations": ["info", "self-test", "speak"],
+  "argv": {
+    "grammar": "<operation> --protocol-major 1 [--require-capability <capability>]...",
+    "answerTextAllowed": false
+  },
+  "capabilities": [
+    "stdin-json-v1",
+    "silent-self-test",
+    "native-onnx-cpu",
+    "local-q8",
+    "voice-af-heart",
+    "speed-1.0",
+    "bundled-player-stdin"
+  ],
+  "capabilityDefinitions": {
+    "stdin-json-v1": "speak accepts exactly one bounded UTF-8 JSON request on stdin",
+    "silent-self-test": "successful self-test writes no stdout or stderr bytes",
+    "native-onnx-cpu": "inference uses the native ONNX Runtime CPU backend only",
+    "local-q8": "the fixed q8 model is loaded only from the installed pack",
+    "voice-af-heart": "the only supported voice is af_heart",
+    "speed-1.0": "speech synthesis uses fixed speed 1.0",
+    "bundled-player-stdin": "canonical bounded WAV is sent to the bundled player on stdin"
+  },
+  "speakRequest": {
+    "transport": "one UTF-8 JSON value followed by EOF on stdin",
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  "infoResponse": {
+    "transport": "one compact UTF-8 JSON object plus LF on stdout",
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["helperVersion", "protocolMajor", "capabilities", "engine"],
+      "properties": {
+        "helperVersion": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "protocolMajor": { "const": 1 },
+        "capabilities": {
+          "type": "array",
+          "prefixItems": [
+            { "const": "stdin-json-v1" },
+            { "const": "silent-self-test" },
+            { "const": "native-onnx-cpu" },
+            { "const": "local-q8" },
+            { "const": "voice-af-heart" },
+            { "const": "speed-1.0" },
+            { "const": "bundled-player-stdin" }
+          ],
+          "items": false,
+          "minItems": 7,
+          "maxItems": 7,
+          "uniqueItems": true
+        },
+        "engine": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["inference", "model", "voice", "speed"],
+          "properties": {
+            "inference": { "const": "onnxruntime-node-cpu" },
+            "model": { "const": "q8" },
+            "voice": { "const": "af_heart" },
+            "speed": { "const": 1 }
+          }
+        }
+      }
+    }
+  },
+  "outputs": {
+    "info": "infoResponse",
+    "selfTestSuccess": "no stdout or stderr bytes",
+    "speakSuccess": "no stdout or stderr bytes",
+    "failure": "one value-free diagnostic plus LF on stderr"
+  },
+  "limits": {
+    "requestBytes": 8192,
+    "textUnicodeScalars": 500,
+    "nonSpecialPhonemeTokens": 509,
+    "audioSamples": 1800000,
+    "sampleRateHz": 24000,
+    "phonemizationMilliseconds": 10000,
+    "inferenceMilliseconds": 30000,
+    "overallMilliseconds": 120000,
+    "stdoutBytes": 16384,
+    "stderrBytes": 16384
+  },
+  "exitCodes": {
+    "success": 0,
+    "operationFailure": 1,
+    "protocolOrUsageFailure": 2,
+    "cancellation": 130
+  },
+  "privacy": {
+    "answerTextLocations": ["speak stdin JSON only"],
+    "forbiddenAnswerTextLocations": [
+      "argv",
+      "environment",
+      "filenames",
+      "diagnostics",
+      "info response"
+    ]
+  }
+}

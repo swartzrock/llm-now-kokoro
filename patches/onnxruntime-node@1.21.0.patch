@@ -1,0 +1,19 @@
+diff --git a/dist/binding.js b/dist/binding.js
+index ed1bca217f0bcac350d9a7c812227a554b4c4281..ac82228828a06a6006356323879c4258f3574a92 100644
+--- a/dist/binding.js
++++ b/dist/binding.js
+@@ -7,7 +7,13 @@ const onnxruntime_common_1 = require("onnxruntime-common");
+ // export native binding
+ exports.binding = 
+ // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+-require(`../bin/napi-v3/${process.platform}/${process.arch}/onnxruntime_binding.node`);
++require((() => {
++    const bindingPath = globalThis[Symbol.for("llm-now-kokoro.onnx-binding-path")];
++    if (typeof bindingPath !== "string") {
++        throw new Error("native-binding-path-unavailable");
++    }
++    return bindingPath;
++})());
+ let ortInitialized = false;
+ const initOrt = () => {
+     if (!ortInitialized) {
