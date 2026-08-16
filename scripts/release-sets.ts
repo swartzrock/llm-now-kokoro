@@ -10,6 +10,7 @@ import type {
 import {
   canonicalManifestJson,
   createReleaseManifest,
+  expectedReleaseFileMode,
   isSafeRelativeReleasePath,
   validateReleaseManifest,
 } from "./release-manifest";
@@ -48,12 +49,12 @@ export async function assembleReleaseSet(
     );
     const destinationPath = resolve(assetRoot, file.releaseFilename);
     await copyFile(sourcePath, destinationPath);
-    const executable =
-      file.logicalDestination === "llm-now-kokoro" ||
-      file.logicalDestination === "llm-now-kokoro.exe" ||
-      file.logicalDestination.endsWith("llm-now-kokoro-player") ||
-      file.logicalDestination.endsWith("llm-now-kokoro-player.exe");
-    await chmod(destinationPath, executable ? 0o755 : 0o644);
+    await chmod(
+      destinationPath,
+      expectedReleaseFileMode(file.logicalDestination) === "0755"
+        ? 0o755
+        : 0o644,
+    );
   }
 
   const manifest = await createReleaseManifest({

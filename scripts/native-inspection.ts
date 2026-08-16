@@ -1,5 +1,5 @@
 import { cpus, release as osRelease, type as osType } from "node:os";
-import { basename, resolve } from "node:path";
+import { basename, posix, resolve } from "node:path";
 
 import type { SupportedRuntimeTarget } from "../src/backend";
 import type { ReleaseManifest } from "./release-manifest";
@@ -399,9 +399,9 @@ export function classifyUndeclaredLinuxDependencies(
   const undeclared: string[] = [];
   for (const dependency of dependencies) {
     const name = dependency.name.toLowerCase();
-    const path = resolve(dependency.path);
+    const path = posix.normalize(dependency.path);
     const declaredPath = declaredPaths.get(name);
-    if (declaredPath !== undefined && path === resolve(declaredPath)) continue;
+    if (declaredPath !== undefined && path === posix.normalize(declaredPath)) continue;
     if (
       REVIEWED_LINUX_SYSTEM_LIBRARIES.has(name) &&
       /^\/(?:lib|lib64|usr\/lib)(?:\/|$)/.test(path)

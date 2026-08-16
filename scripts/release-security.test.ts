@@ -253,15 +253,15 @@ on:\n  workflow_dispatch:\npermissions:\n  contents: read\njobs:\n  publish:\n  
   });
 
   test("repository workflows isolate PRs from release identities", async () => {
-    const protectedSource = await Bun.file(resolve(
+    const protectedSource = (await Bun.file(resolve(
       import.meta.dir,
       "../.github/workflows/release-rc.yml",
-    )).text();
+    )).text()).replaceAll("\r\n", "\n");
     expect(() => assertProtectedReleaseWorkflow(protectedSource)).not.toThrow();
-    const prSource = await Bun.file(resolve(
+    const prSource = (await Bun.file(resolve(
       import.meta.dir,
       "../.github/workflows/architecture-smoke.yml",
-    )).text();
+    )).text()).replaceAll("\r\n", "\n");
     expect(prSource).toContain("pull_request:");
     expect(prSource).not.toContain("release-signing");
     expect(prSource).not.toContain("secrets.");

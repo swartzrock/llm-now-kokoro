@@ -149,10 +149,14 @@ export async function createReleaseManifest(
       if (!/^[0-9a-f]{40}$/.test(input.sourceCommit)) throw new Error("invalid-source-commit");
       provenance.sourceRevision = input.sourceCommit;
     }
+    const expectedMode = expectedReleaseFileMode(file.logicalDestination);
+    if (process.platform !== "win32" && inspected.mode !== expectedMode) {
+      throw new Error("release-file-mode-mismatch");
+    }
     files.push({
       bytes: inspected.bytes,
       logicalDestination: file.logicalDestination,
-      mode: inspected.mode,
+      mode: expectedMode,
       provenance,
       releaseFilename: file.releaseFilename,
       sha256: inspected.sha256,
@@ -225,7 +229,11 @@ export async function validateReleaseManifest(
     if (inspected.bytes !== file.bytes || inspected.sha256 !== file.sha256) {
       throw new Error("release-file-digest-mismatch");
     }
-    if (inspected.mode !== file.mode) {
+    const expectedMode = expectedReleaseFileMode(file.logicalDestination);
+    if (
+      file.mode !== expectedMode ||
+      (process.platform !== "win32" && inspected.mode !== expectedMode)
+    ) {
       throw new Error("release-file-mode-mismatch");
     }
   }
@@ -393,6 +401,17 @@ export function isSafeRelativeReleasePath(path: string): boolean {
     path.split("/").every(
       (component) => component !== "" && component !== "." && component !== "..",
     );
+}
+
+export function expectedReleaseFileMode(
+  logicalDestination: string,
+): "0644" | "0755" {
+  return logicalDestination === "llm-now-kokoro" ||
+      logicalDestination === "llm-now-kokoro.exe" ||
+      logicalDestination.endsWith("llm-now-kokoro-player") ||
+      logicalDestination.endsWith("llm-now-kokoro-player.exe")
+    ? "0755"
+    : "0644";
 }
 
 function assertSafeLogicalPath(path: string): void {
