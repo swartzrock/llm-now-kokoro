@@ -5,10 +5,11 @@ private helper protocol. It is intentionally not a public CLI.
 
 The smoke build compiles the production Bun helper, copies only the current
 target's CPU ONNX addon and colocated runtime library to a real runtime
-directory, loads the q8 model and `af_heart` from a pinned local asset tree with
+directory, loads the q8 model and all 55 pinned voices from a local asset tree with
 remote models disabled, runs the versioned `info` and silent `self-test`
-operations from an installed path containing spaces and Unicode, synthesizes
-one fixed phrase, and pipes the resulting bounded WAV to the miniaudio player.
+operations from an installed path containing spaces and Unicode, synthesizes a
+French phrase with `ff_siwis` through the multilingual phonemizer, and pipes the
+resulting bounded WAV to the miniaudio player.
 CI uses the player's silent validation mode;
 `bun run smoke:architecture -- --play` exercises the audio device locally.
 
@@ -32,7 +33,7 @@ only the model files at revision
 `350784a9467a79d0fa65802132668e5afbcf3777`, then enforces their fixed sizes and
 SHA-256 digests. The smoke assembles the exact model tree and exact
 current-target runtime tree, then rejects ONNX inference Wasm, CUDA/DirectML,
-extra voices, unrelated native targets, missing helper/player files, and
+undeclared voices, unrelated native targets, missing helper/player files, and
 undeclared model files. The compiled helper itself has no download operation or
 remote fallback.
 

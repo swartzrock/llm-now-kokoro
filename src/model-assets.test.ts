@@ -4,10 +4,13 @@ import { relative, resolve } from "node:path";
 import {
   MODEL_ASSETS,
   MODEL_REVISION,
+  MULTILINGUAL_PHONEMIZER_INVENTORY,
   PHONEMIZER_INVENTORY,
   verifyLocalModelAssets,
+  verifyPinnedMultilingualPhonemizer,
   verifyPinnedPhonemizerBundle,
 } from "./model-assets";
+import { SUPPORTED_VOICES } from "./voices";
 
 function validFiles() {
   return new Map(
@@ -27,7 +30,7 @@ function relativeAssetPath(packRoot: string, path: string): string {
 }
 
 describe("local model assets", () => {
-  test("pins the exact minimal revision, q8 model, and af_heart tree", async () => {
+  test("pins the exact revision, q8 model, and complete voice tree", async () => {
     const files = validFiles();
     const packRoot = resolve("/packs/Kokoro ü");
 
@@ -50,7 +53,7 @@ describe("local model assets", () => {
       "model/tokenizer.json",
       "model/tokenizer_config.json",
       "model/onnx/model_quantized.onnx",
-      "model/voices/af_heart.bin",
+      ...SUPPORTED_VOICES.map((voice) => `model/voices/${voice}.bin`),
     ]);
   });
 
@@ -84,7 +87,7 @@ describe("local model assets", () => {
           ...MODEL_ASSETS.map((asset) =>
             asset.relativePath.slice("model/".length),
           ),
-          "voices/af_bella.bin",
+          "voices/not_a_real_voice.bin",
         ],
         inspectFile: async () => {
           throw new Error("must not inspect an invalid tree");
@@ -95,6 +98,38 @@ describe("local model assets", () => {
 });
 
 describe("phonemizer inventory", () => {
+  test("binds the multilingual eSpeak JavaScript and WASM payloads", async () => {
+    const repositoryRoot = resolve("/repository");
+    const inspected: string[] = [];
+    await verifyPinnedMultilingualPhonemizer(repositoryRoot, async (path) => {
+      inspected.push(relativeAssetPath(repositoryRoot, path));
+      const expected = [
+        MULTILINGUAL_PHONEMIZER_INVENTORY.javascript,
+        MULTILINGUAL_PHONEMIZER_INVENTORY.wasm,
+      ].find((entry) => resolve(repositoryRoot, entry.relativePath) === path)!;
+      return {
+        bytes: expected.bytes,
+        isRegularFile: true,
+        sha256: expected.sha256,
+      };
+    });
+
+    expect(inspected).toEqual([
+      "node_modules/espeak-ng/dist/espeak-ng.js",
+      "node_modules/espeak-ng/dist/espeak-ng.wasm",
+    ]);
+  });
+
+  test("rejects a changed multilingual eSpeak payload", async () => {
+    await expect(
+      verifyPinnedMultilingualPhonemizer(resolve("/repository"), async () => ({
+        bytes: 1,
+        isRegularFile: true,
+        sha256: "corrupt",
+      })),
+    ).rejects.toThrow("multilingual-phonemizer-bundle-invalid");
+  });
+
   test("binds and audits the installed Emscripten payload", async () => {
     const repositoryRoot = resolve("/repository");
     await verifyPinnedPhonemizerBundle(

@@ -11,6 +11,7 @@ import {
   parseHelperArguments,
 } from "./protocol";
 import { HelperFailure } from "./result";
+import { SUPPORTED_VOICES } from "./voices";
 
 const encoder = new TextEncoder();
 
@@ -80,7 +81,26 @@ describe("speak request protocol", () => {
     const text = '"hello"\nGrüße 😀; $(touch nope) | & < >';
     expect(decodeSpeakRequest(encoder.encode(JSON.stringify({ text })))).toEqual({
       text,
+      voice: "af_heart",
     });
+  });
+
+  test("accepts an allowlisted voice and rejects unknown or path-like voices", () => {
+    expect(
+      decodeSpeakRequest(
+        encoder.encode(JSON.stringify({ text: "Bonjour", voice: "ff_siwis" })),
+      ),
+    ).toEqual({ text: "Bonjour", voice: "ff_siwis" });
+
+    for (const voice of ["unknown", "../ff_siwis", "ff_siwis.bin"]) {
+      expectProtocolFailure(
+        () =>
+          decodeSpeakRequest(
+            encoder.encode(JSON.stringify({ text: "Bonjour", voice })),
+          ),
+        "unsupported-voice",
+      );
+    }
   });
 
   test("counts Unicode scalar values instead of UTF-16 code units", () => {
@@ -96,7 +116,7 @@ describe("speak request protocol", () => {
     [encoder.encode('{"text":"a\\u0000b"}'), "nul-text"],
     [encoder.encode('{"text":" \\t\\n"}'), "blank-text"],
     [encoder.encode('{"text":"\\ud800"}'), "invalid-unicode-scalar"],
-    [encoder.encode('{"text":"hello","voice":"af_bella"}'), "invalid-request"],
+    [encoder.encode('{"text":"hello","language":"fr"}'), "invalid-request"],
     [encoder.encode('{"text":42}'), "invalid-request"],
     [encoder.encode("[]"), "invalid-request"],
     [new Uint8Array(MAX_REQUEST_BYTES + 1), "request-too-large"],
@@ -127,6 +147,7 @@ describe("canonical protocol fixtures", () => {
     );
     expect(decodeSpeakRequest(fixture)).toEqual({
       text: '"Hello"\nGrüße 😀; $(echo no) | & < >',
+      voice: "af_heart",
     });
   });
 
@@ -163,8 +184,16 @@ describe("canonical protocol fixtures", () => {
       inference: { const: "onnxruntime-node-cpu" },
       model: { const: "q8" },
       voice: { const: "af_heart" },
+      voices: {
+        type: "array",
+        items: { $ref: "#/$defs/voice" },
+        minItems: 55,
+        maxItems: 55,
+        uniqueItems: true,
+      },
       speed: { const: 1 },
     });
+    expect(contract.$defs.voice.enum).toEqual(Array.from(SUPPORTED_VOICES));
     expect(contract.limits.requestBytes).toBe(MAX_REQUEST_BYTES);
     expect(contract.limits.textUnicodeScalars).toBe(MAX_TEXT_SCALARS);
   });

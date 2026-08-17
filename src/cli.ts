@@ -20,10 +20,12 @@ import {
   protocolFailure,
   type HelperExitCode,
 } from "./result";
+import type { SupportedVoiceName } from "./voices";
 
 export interface SpeechAnalysis {
   nonSpecialTokenCount: number;
   synthesisInput: unknown;
+  voice: SupportedVoiceName;
 }
 
 export interface SynthesizedAudio {
@@ -49,6 +51,7 @@ export interface HelperDependencies {
   inspectText?: (
     text: string,
     signal: AbortSignal,
+    voice: SupportedVoiceName,
   ) => Promise<SpeechAnalysis>;
   synthesize?: (
     analysis: SpeechAnalysis,
@@ -144,7 +147,12 @@ async function speak(
       dependencies.deadlines?.phonemization ?? PHONEMIZATION_TIMEOUT_MS,
       overallSignal,
       operationFailure("phonemization-timeout"),
-      (signal) => (dependencies.inspectText ?? unavailableInspect)(request.text, signal),
+      (signal) =>
+        (dependencies.inspectText ?? unavailableInspect)(
+          request.text,
+          signal,
+          request.voice,
+        ),
     );
     validateAnalysis(analysis);
 

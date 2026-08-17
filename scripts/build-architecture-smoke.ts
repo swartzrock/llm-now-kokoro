@@ -8,6 +8,7 @@ import {
 } from "../src/backend";
 import {
   verifyLocalModelAssets,
+  verifyPinnedMultilingualPhonemizer,
   verifyPinnedPhonemizerBundle,
 } from "../src/model-assets";
 import { ADDON_NAME } from "../src/native-runtime";
@@ -63,6 +64,7 @@ export async function buildArchitectureSmoke(): Promise<void> {
 
   await verifyArchitectureAssets();
   await verifyPinnedPhonemizerBundle(resolve(import.meta.dir, ".."));
+  await verifyPinnedMultilingualPhonemizer(resolve(import.meta.dir, ".."));
   await rm(ARCHITECTURE_DIST_ROOT, { recursive: true, force: true });
   await mkdir(ARCHITECTURE_RUNTIME_ROOT, { recursive: true });
   await Promise.all([

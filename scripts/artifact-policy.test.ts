@@ -1,21 +1,18 @@
 import { describe, expect, test } from "bun:test";
 
 import { assertInferenceArtifactPolicy } from "./artifact-policy";
+import { MODEL_ASSETS } from "../src/model-assets";
 
 const linuxArm64 = [
   "llm-now-kokoro",
   "runtime/llm-now-kokoro-player",
   "runtime/onnx/onnxruntime_binding.node",
   "runtime/onnx/libonnxruntime.so.1",
-  "model/config.json",
-  "model/tokenizer.json",
-  "model/tokenizer_config.json",
-  "model/onnx/model_quantized.onnx",
-  "model/voices/af_heart.bin",
+  ...MODEL_ASSETS.map((asset) => asset.relativePath),
 ];
 
 describe("inference artifact policy", () => {
-  test("accepts exactly one native target and the fixed voice", () => {
+  test("accepts exactly one native target and every pinned voice", () => {
     expect(() =>
       assertInferenceArtifactPolicy(linuxArm64, "linux", "arm64"),
     ).not.toThrow();
@@ -25,11 +22,20 @@ describe("inference artifact policy", () => {
     "runtime/ort-wasm-simd-threaded.wasm",
     "runtime/libonnxruntime_providers_cuda.so",
     "runtime/onnxruntime_providers_dml.dll",
-    "model/voices/af_bella.bin",
   ])("rejects forbidden artifact %s", (path) => {
     expect(() =>
       assertInferenceArtifactPolicy([...linuxArm64, path], "linux", "arm64"),
     ).toThrow("forbidden-inference-artifact");
+  });
+
+  test("rejects an undeclared voice", () => {
+    expect(() =>
+      assertInferenceArtifactPolicy(
+        [...linuxArm64, "model/voices/not_a_real_voice.bin"],
+        "linux",
+        "arm64",
+      ),
+    ).toThrow("inference-artifact-layout-invalid");
   });
 
   test("rejects a library from another target", () => {

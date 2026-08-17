@@ -64,6 +64,7 @@ describe("release manifest", () => {
     });
     expect(manifest.dependencies).toEqual({
       bun: "1.3.14",
+      espeakNg: "1.0.2",
       kokoroJs: "1.2.1",
       onnxruntimeNode: "1.21.0",
       transformersJs: "3.5.1",
@@ -86,6 +87,23 @@ describe("release manifest", () => {
           compressedSha256:
             "4b4454422468c6195d70a3f50eaed157293d6a7af3e509a0612c2abcdb7defa5",
         }),
+      }),
+      expect.objectContaining({
+        embeddedWithin: "llm-now-kokoro-helper",
+        name: "espeak-ng-multilingual-phonemizer",
+        runtimeFormat: "emscripten-javascript-with-wasm-sidecar-embedded-by-bun",
+        bundle: expect.objectContaining({
+          bytes: 178_386,
+          sha256:
+            "406c6655a6cacf34d84fc69dc4478c81b71518809080ce2d05df1b706d76429d",
+        }),
+        additionalPayloads: [
+          expect.objectContaining({
+            bytes: 18_485_010,
+            sha256:
+              "10d24bb7e4124e983aa9cd8cd96c52c8ea4b607d81956ec70846684e2827d532",
+          }),
+        ],
       }),
     ]);
     expect(manifest.protocol.capabilities).toContain("native-onnx-cpu");

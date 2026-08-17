@@ -4,6 +4,8 @@ import { lstat, readdir } from "node:fs/promises";
 import { isAbsolute, relative, resolve } from "node:path";
 import { gunzipSync } from "node:zlib";
 
+import { VOICE_DEFINITIONS } from "./voices";
+
 export const MODEL_REVISION =
   "1939ad2a8e416c0acfeecc08a694d14ef25f2231";
 
@@ -39,12 +41,15 @@ export const MODEL_ASSETS: readonly PinnedAsset[] = Object.freeze([
     bytes: 92_361_116,
     sha256: "fbae9257e1e05ffc727e951ef9b9c98418e6d79f1c9b6b13bd59f5c9028a1478",
   },
-  {
-    id: "af-heart",
-    relativePath: "model/voices/af_heart.bin",
-    bytes: 522_240,
-    sha256: "d583ccff3cdca2f7fae535cb998ac07e9fcb90f09737b9a41fa2734ec44a8f0b",
-  },
+  ...VOICE_DEFINITIONS.map((voice) => ({
+    id:
+      voice.name === "af_heart"
+        ? "af-heart"
+        : `voice-${voice.name.replaceAll("_", "-")}`,
+    relativePath: `model/voices/${voice.name}.bin`,
+    bytes: voice.bytes,
+    sha256: voice.sha256,
+  })),
 ]);
 
 export const PHONEMIZER_INVENTORY = Object.freeze({
@@ -74,6 +79,24 @@ export const PHONEMIZER_INVENTORY = Object.freeze({
     embeddedEngine: "eSpeak NG",
     embeddedEngineLicense: "GPL-3.0-or-later",
   },
+  releaseStatus: "blocked-pending-source-relink-and-license-audit",
+});
+
+export const MULTILINGUAL_PHONEMIZER_INVENTORY = Object.freeze({
+  packageVersion: "1.0.2",
+  upstreamCommit: "eec88dbcc1482b1a03a76cf9d2025a0acde8982e",
+  runtimeFormat: "emscripten-javascript-with-wasm-sidecar-embedded-by-bun",
+  javascript: {
+    relativePath: "node_modules/espeak-ng/dist/espeak-ng.js",
+    bytes: 178_386,
+    sha256: "406c6655a6cacf34d84fc69dc4478c81b71518809080ce2d05df1b706d76429d",
+  },
+  wasm: {
+    relativePath: "node_modules/espeak-ng/dist/espeak-ng.wasm",
+    bytes: 18_485_010,
+    sha256: "10d24bb7e4124e983aa9cd8cd96c52c8ea4b607d81956ec70846684e2827d532",
+  },
+  license: "GPL-3.0-or-later",
   releaseStatus: "blocked-pending-source-relink-and-license-audit",
 });
 
@@ -179,6 +202,30 @@ export async function verifyPinnedPhonemizerBundle(
     payload.wasmMagicPresent !== expectedWasmAudit.wasmMagicPresent
   ) {
     throw new Error("phonemizer-payload-invalid");
+  }
+}
+
+export async function verifyPinnedMultilingualPhonemizer(
+  repositoryRoot = resolve(import.meta.dir, ".."),
+  inspectFile: (path: string) => Promise<InspectedFile> = inspectPinnedFile,
+): Promise<void> {
+  for (const expected of [
+    MULTILINGUAL_PHONEMIZER_INVENTORY.javascript,
+    MULTILINGUAL_PHONEMIZER_INVENTORY.wasm,
+  ]) {
+    let actual: InspectedFile;
+    try {
+      actual = await inspectFile(resolve(repositoryRoot, expected.relativePath));
+    } catch {
+      throw new Error("multilingual-phonemizer-bundle-invalid");
+    }
+    if (
+      !actual.isRegularFile ||
+      actual.bytes !== expected.bytes ||
+      actual.sha256 !== expected.sha256
+    ) {
+      throw new Error("multilingual-phonemizer-bundle-invalid");
+    }
   }
 }
 

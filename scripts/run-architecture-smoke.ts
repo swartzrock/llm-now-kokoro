@@ -24,6 +24,7 @@ const parsedInfo = JSON.parse(info.stdout) as {
     inference?: string;
     model?: string;
     voice?: string;
+    voices?: string[];
     speed?: number;
   };
   protocolMajor?: number;
@@ -34,6 +35,7 @@ if (
   parsedInfo.engine?.inference !== "onnxruntime-node-cpu" ||
   parsedInfo.engine.model !== "q8" ||
   parsedInfo.engine.voice !== "af_heart" ||
+  !parsedInfo.engine.voices?.includes("ff_siwis") ||
   parsedInfo.engine.speed !== 1
 ) {
   throw new Error("Architecture helper returned invalid info");

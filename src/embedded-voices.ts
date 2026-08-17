@@ -1,3 +1,7 @@
-export const FIXED_VOICE = "af_heart" as const;
+import type { SupportedVoiceName } from "./voices";
+
 export const FIXED_SPEED = 1.0 as const;
-export const FIXED_VOICE_RELATIVE_PATH = "model/voices/af_heart.bin";
+
+export function voiceRelativePath(voice: SupportedVoiceName): string {
+  return `model/voices/${voice}.bin`;
+}

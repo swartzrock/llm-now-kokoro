@@ -12,6 +12,7 @@ import {
   operationFailure,
 } from "./result";
 import type { NativeSpeechEngine } from "./tts";
+import { DEFAULT_VOICE, type SupportedVoiceName } from "./voices";
 
 export const ENGINE_CHILD_ENVIRONMENT_KEY =
   "LLM_NOW_KOKORO_INTERNAL_ENGINE_CHILD";
@@ -71,10 +72,11 @@ export function createSupervisedSpeechEngine(
       await session?.terminate();
     },
 
-    async inspectText(text, signal) {
+    async inspectText(text, signal, voice = DEFAULT_VOICE) {
       if (activeSession) throw operationFailure("engine-session-active");
       const session = await EngineSession.start(
         text,
+        voice,
         packRoot,
         signal,
         dependencies,
@@ -90,7 +92,7 @@ export function createSupervisedSpeechEngine(
           await session.terminate();
           activeSession = undefined;
         }
-        return analysis;
+        return { ...analysis, voice };
       } catch (error) {
         activeSession = undefined;
         await session.terminate().catch(() => {});
@@ -149,6 +151,7 @@ class EngineSession {
 
   static async start(
     text: string,
+    voice: SupportedVoiceName,
     packRoot: string,
     signal: AbortSignal,
     dependencies: EngineProcessDependencies,
@@ -187,7 +190,7 @@ class EngineSession {
       if (ready.type !== "ready") {
         throw operationFailure("engine-child-protocol-invalid");
       }
-      await withAbort(writeRequest(child.stdin, text, signal), signal);
+      await withAbort(writeRequest(child.stdin, text, voice, signal), signal);
       throwIfAborted(signal);
       return session;
     } catch (error) {
@@ -197,7 +200,7 @@ class EngineSession {
     }
   }
 
-  async inspect(signal: AbortSignal): Promise<SpeechAnalysis> {
+  async inspect(signal: AbortSignal): Promise<Omit<SpeechAnalysis, "voice">> {
     const message = await this.#nextMessage(signal);
     if (message.type !== "analysis") {
       throw operationFailure("engine-child-protocol-invalid");
@@ -420,9 +423,10 @@ async function resolveEngineCommand(): Promise<string[]> {
 async function writeRequest(
   input: EngineInput,
   text: string,
+  voice: SupportedVoiceName,
   signal: AbortSignal,
 ): Promise<void> {
-  const bytes = new TextEncoder().encode(JSON.stringify({ text }));
+  const bytes = new TextEncoder().encode(JSON.stringify({ text, voice }));
   const clear = () => bytes.fill(0);
   signal.addEventListener("abort", clear, { once: true });
   try {

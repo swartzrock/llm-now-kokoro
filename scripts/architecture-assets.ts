@@ -35,6 +35,8 @@ const MODEL_DOWNLOADS: PinnedAsset[] = MODEL_ASSETS.map((asset) => ({
   url: `${MODEL_BASE}/${asset.relativePath.slice("model/".length)}`,
 }));
 
+const ASSET_BATCH_SIZE = 4;
+
 export const ARCHITECTURE_ASSETS: readonly PinnedAsset[] = Object.freeze([
   ...MODEL_DOWNLOADS,
   {
@@ -46,8 +48,8 @@ export const ARCHITECTURE_ASSETS: readonly PinnedAsset[] = Object.freeze([
 ]);
 
 export async function prepareArchitectureAssets(): Promise<void> {
-  for (const asset of ARCHITECTURE_ASSETS) {
-    if (await isExpectedAsset(asset)) continue;
+  await forEachAssetBatch(async (asset) => {
+    if (await isExpectedAsset(asset)) return;
 
     await mkdir(dirname(asset.destination), { recursive: true });
     const partial = `${asset.destination}.part`;
@@ -82,16 +84,30 @@ export async function prepareArchitectureAssets(): Promise<void> {
       await rm(partial, { force: true });
       throw error;
     }
-  }
+  });
 }
 
 export async function verifyArchitectureAssets(): Promise<void> {
-  for (const asset of ARCHITECTURE_ASSETS) {
+  await forEachAssetBatch(async (asset) => {
     if (!(await isExpectedAsset(asset))) {
       throw new Error(
         `Pinned architecture asset is missing or invalid: ${asset.destination}`,
       );
     }
+  });
+}
+
+async function forEachAssetBatch(
+  operation: (asset: PinnedAsset) => Promise<void>,
+): Promise<void> {
+  for (let index = 0; index < ARCHITECTURE_ASSETS.length; index += ASSET_BATCH_SIZE) {
+    const results = await Promise.allSettled(
+      ARCHITECTURE_ASSETS.slice(index, index + ASSET_BATCH_SIZE).map(operation),
+    );
+    const failure = results.find(
+      (result): result is PromiseRejectedResult => result.status === "rejected",
+    );
+    if (failure) throw failure.reason;
   }
 }
 

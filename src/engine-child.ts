@@ -45,7 +45,11 @@ export async function runEngineChildMain(): Promise<HelperExitCode> {
       controller.signal,
     );
     const request = decodeSpeakRequest(requestBytes);
-    const analysis = await engine.inspectText(request.text, controller.signal);
+    const analysis = await engine.inspectText(
+      request.text,
+      controller.signal,
+      request.voice,
+    );
     if (
       !Number.isSafeInteger(analysis.nonSpecialTokenCount) ||
       analysis.nonSpecialTokenCount < 0

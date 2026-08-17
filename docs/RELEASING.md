@@ -96,7 +96,7 @@ obligations and source/relink material where required.
 3. The workflow proves the SHA is on `main`, is associated with a merged PR,
    and has no existing tag or release.
 4. Five native jobs build and validate without access to signing identities.
-5. A collected unsigned gate validates inventory, q8/`af_heart`, protocol,
+5. A collected unsigned gate validates inventory, q8/all pinned voices, protocol,
    provenance, native reports, size budgets, and compliance before signing.
 6. macOS signs addon/dylibs/player/helper inside-out and submits a build-only
    ZIP to notarization. Individual files are not claimed to be stapled.

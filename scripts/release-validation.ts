@@ -193,7 +193,7 @@ export function assertReleaseInventory(manifest: ReleaseManifest): void {
       lower.includes("cuda") ||
       lower.includes("directml") ||
       lower.includes("node_modules") ||
-      (/voices\/.+\.bin$/.test(lower) && !lower.includes("voices/af_heart.bin"))
+      lower.includes("providers_dml")
     ) {
       throw new Error("forbidden-release-artifact");
     }

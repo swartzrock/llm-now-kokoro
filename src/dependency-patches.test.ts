@@ -41,7 +41,7 @@ describe("native-only dependency patch anchors", () => {
     expect(patch).not.toContain("supportedDevices.push('wasm')");
   });
 
-  test("Kokoro exports its upstream phonemizer and requires the fixed provider", async () => {
+  test("Kokoro exports its upstream phonemizer and requires the local provider", async () => {
     const [runtime, types, patch] = await Promise.all([
       Bun.file(resolve(root, "node_modules/kokoro-js/dist/kokoro.js")).text(),
       Bun.file(resolve(root, "node_modules/kokoro-js/types/kokoro.d.ts")).text(),
@@ -49,7 +49,7 @@ describe("native-only dependency patch anchors", () => {
     ]);
 
     for (const source of [runtime, patch]) {
-      expect(source).toContain('"af_heart"!==e');
+      expect(source).not.toContain('"af_heart"!==e');
       expect(source).toContain("voice-provider-unavailable");
       expect(source).toContain("m as phonemize");
     }

@@ -7,7 +7,11 @@ import {
   SUPPORTED_RUNTIME_TARGETS,
   type SupportedRuntimeTarget,
 } from "../src/backend";
-import { MODEL_REVISION, PHONEMIZER_INVENTORY } from "../src/model-assets";
+import {
+  MODEL_REVISION,
+  MULTILINGUAL_PHONEMIZER_INVENTORY,
+  PHONEMIZER_INVENTORY,
+} from "../src/model-assets";
 import {
   HELPER_VERSION,
   PROTOCOL_CAPABILITIES,
@@ -47,18 +51,23 @@ export interface ReleaseManifest {
   assetClass: ReleaseAssetClass;
   dependencies: {
     bun: "1.3.14";
+    espeakNg: "1.0.2";
     kokoroJs: "1.2.1";
     onnxruntimeNode: "1.21.0";
     transformersJs: "3.5.1";
   };
-  embeddedComponents: readonly [
-    {
+  embeddedComponents: readonly {
+      additionalPayloads?: readonly {
+        bytes: number;
+        sha256: string;
+        sourcePath: string;
+      }[];
       bundle: {
         bytes: number;
         sha256: string;
         sourcePath: string;
       };
-      embeddedPayload: {
+      embeddedPayload?: {
         compressedBytes: number;
         compressedSha256: string;
         decompressedBytes: number;
@@ -66,12 +75,11 @@ export interface ReleaseManifest {
       };
       embeddedWithin: "llm-now-kokoro-helper";
       license: string;
-      name: "espeak-ng-phonemizer";
+      name: "espeak-ng-phonemizer" | "espeak-ng-multilingual-phonemizer";
       releaseGate: string;
       runtimeFormat: string;
       upstreamCommit: string;
-    },
-  ];
+    }[];
   files: ReleaseManifestFile[];
   formatVersion: typeof RELEASE_MANIFEST_VERSION;
   helperVersion: typeof HELPER_VERSION;
@@ -82,6 +90,7 @@ export interface ReleaseManifest {
   };
   sourceRevisions: {
     miniaudio: typeof MINIAUDIO_REVISION;
+    multilingualPhonemizer: typeof MULTILINGUAL_PHONEMIZER_INVENTORY.upstreamCommit;
     phonemizer: typeof PHONEMIZER_INVENTORY.upstreamCommit;
   };
   target: SupportedRuntimeTarget | null;
@@ -97,6 +106,7 @@ interface CreateManifestInput {
 
 const DEPENDENCIES = Object.freeze({
   bun: "1.3.14",
+  espeakNg: "1.0.2",
   kokoroJs: "1.2.1",
   onnxruntimeNode: "1.21.0",
   transformersJs: "3.5.1",
@@ -121,6 +131,26 @@ const EMBEDDED_COMPONENTS: ReleaseManifest["embeddedComponents"] = Object.freeze
     releaseGate: PHONEMIZER_INVENTORY.releaseStatus,
     runtimeFormat: PHONEMIZER_INVENTORY.runtimeFormat,
     upstreamCommit: PHONEMIZER_INVENTORY.upstreamCommit,
+  }),
+  Object.freeze({
+    additionalPayloads: Object.freeze([
+      Object.freeze({
+        bytes: MULTILINGUAL_PHONEMIZER_INVENTORY.wasm.bytes,
+        sha256: MULTILINGUAL_PHONEMIZER_INVENTORY.wasm.sha256,
+        sourcePath: MULTILINGUAL_PHONEMIZER_INVENTORY.wasm.relativePath,
+      }),
+    ]),
+    bundle: Object.freeze({
+      bytes: MULTILINGUAL_PHONEMIZER_INVENTORY.javascript.bytes,
+      sha256: MULTILINGUAL_PHONEMIZER_INVENTORY.javascript.sha256,
+      sourcePath: MULTILINGUAL_PHONEMIZER_INVENTORY.javascript.relativePath,
+    }),
+    embeddedWithin: "llm-now-kokoro-helper",
+    license: MULTILINGUAL_PHONEMIZER_INVENTORY.license,
+    name: "espeak-ng-multilingual-phonemizer",
+    releaseGate: MULTILINGUAL_PHONEMIZER_INVENTORY.releaseStatus,
+    runtimeFormat: MULTILINGUAL_PHONEMIZER_INVENTORY.runtimeFormat,
+    upstreamCommit: MULTILINGUAL_PHONEMIZER_INVENTORY.upstreamCommit,
   }),
 ]);
 
@@ -180,6 +210,8 @@ export async function createReleaseManifest(
     },
     sourceRevisions: {
       miniaudio: MINIAUDIO_REVISION,
+      multilingualPhonemizer:
+        MULTILINGUAL_PHONEMIZER_INVENTORY.upstreamCommit,
       phonemizer: PHONEMIZER_INVENTORY.upstreamCommit,
     },
     target: input.target,
@@ -388,6 +420,8 @@ function assertManifestMetadata(manifest: ReleaseManifest): void {
     JSON.stringify(manifest.embeddedComponents) !==
       JSON.stringify(EMBEDDED_COMPONENTS) ||
     manifest.sourceRevisions.miniaudio !== MINIAUDIO_REVISION ||
+    manifest.sourceRevisions.multilingualPhonemizer !==
+      MULTILINGUAL_PHONEMIZER_INVENTORY.upstreamCommit ||
     manifest.sourceRevisions.phonemizer !== PHONEMIZER_INVENTORY.upstreamCommit
   ) {
     throw new Error("release-manifest-metadata-mismatch");
