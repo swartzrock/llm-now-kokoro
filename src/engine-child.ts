@@ -16,6 +16,18 @@ import { createNativeSpeechEngine } from "./tts";
 
 type ParentMessage = { type: "synthesize" };
 
+export function createAudioMessage(
+  bytes: Uint8Array,
+  sampleCount: number,
+): { type: "audio"; bytes: Uint8Array; sampleCount: number } {
+  return {
+    type: "audio",
+    // Keep the IPC payload independent from the buffer cleared after send.
+    bytes: bytes.slice(),
+    sampleCount,
+  };
+}
+
 export async function runEngineChildMain(): Promise<HelperExitCode> {
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -33,7 +45,11 @@ export async function runEngineChildMain(): Promise<HelperExitCode> {
       controller.signal,
     );
     const request = decodeSpeakRequest(requestBytes);
-    const analysis = await engine.inspectText(request.text, controller.signal);
+    const analysis = await engine.inspectText(
+      request.text,
+      controller.signal,
+      request.voice,
+    );
     if (
       !Number.isSafeInteger(analysis.nonSpecialTokenCount) ||
       analysis.nonSpecialTokenCount < 0
@@ -53,11 +69,7 @@ export async function runEngineChildMain(): Promise<HelperExitCode> {
     if (audio.sampleCount > MAX_AUDIO_SAMPLES) {
       throw protocolFailure("audio-sample-limit");
     }
-    await sendToParent({
-      type: "audio",
-      bytes: wavBytes,
-      sampleCount: audio.sampleCount,
-    });
+    await sendToParent(createAudioMessage(wavBytes, audio.sampleCount));
     process.disconnect?.();
     return 0;
   } catch (error) {

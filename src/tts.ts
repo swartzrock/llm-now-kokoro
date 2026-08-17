@@ -8,8 +8,7 @@ import type {
 import { withDeadline } from "./cli";
 import {
   FIXED_SPEED,
-  FIXED_VOICE,
-  FIXED_VOICE_RELATIVE_PATH,
+  voiceRelativePath,
 } from "./embedded-voices";
 import { createSupervisedSpeechEngine } from "./engine-process";
 import {
@@ -27,10 +26,18 @@ import {
   verifyBundledPlayer,
 } from "./playback";
 import { operationFailure, protocolFailure } from "./result";
+import {
+  DEFAULT_VOICE,
+  isSupportedVoice,
+  languageForVoice,
+  type SupportedVoiceName,
+  type VoiceLanguage,
+} from "./voices";
 
 const MODEL_ID = "model";
 const MODEL_DTYPE = "q8" as const;
-const SELF_TEST_TEXT = "Native speech engine self test.";
+const SELF_TEST_TEXT = "Bonjour, test vocal local.";
+const SELF_TEST_VOICE = "ff_siwis" as const;
 const VOICE_PROVIDER_SYMBOL = Symbol.for("kokoro-js.voice-provider");
 
 interface TokenIds {
@@ -46,7 +53,7 @@ interface RawAudio {
 interface KokoroModel {
   generate_from_ids(
     inputIds: TokenIds,
-    options: { voice: typeof FIXED_VOICE; speed: typeof FIXED_SPEED },
+    options: { voice: SupportedVoiceName; speed: typeof FIXED_SPEED },
   ): Promise<RawAudio>;
 }
 
@@ -67,12 +74,16 @@ interface SpeechLibraries {
     options: { device: "cpu"; dtype: typeof MODEL_DTYPE },
   ): Promise<KokoroModel>;
   loadTokenizer(modelId: string): Promise<KokoroTokenizer>;
-  phonemize(text: string, language: "a"): Promise<string>;
+  phonemize(text: string, language: VoiceLanguage): Promise<string>;
 }
 
 export interface NativeSpeechEngine {
   dispose?(): Promise<void>;
-  inspectText(text: string, signal: AbortSignal): Promise<SpeechAnalysis>;
+  inspectText(
+    text: string,
+    signal: AbortSignal,
+    voice?: SupportedVoiceName,
+  ): Promise<SpeechAnalysis>;
   synthesize(
     analysis: SpeechAnalysis,
     signal: AbortSignal,
@@ -116,7 +127,7 @@ async function prepareNativeSpeechPack(
     dependencies.verifyPlayer ?? verifyBundledPlayer
   )(packRoot);
   installVoiceProvider(
-    resolve(packRoot, FIXED_VOICE_RELATIVE_PATH),
+    packRoot,
     dependencies.readVoice ?? readVoiceFile,
   );
   return {
@@ -153,11 +164,11 @@ async function loadPreparedSpeechEngine(
       }));
 
   return {
-    async inspectText(text, signal) {
+    async inspectText(text, signal, voice = DEFAULT_VOICE) {
       throwIfAborted(signal);
       let phonemes: string;
       try {
-        phonemes = await libraries.phonemize(text, "a");
+        phonemes = await libraries.phonemize(text, languageForVoice(voice));
       } catch {
         throw new Error("phonemization-failed");
       }
@@ -177,6 +188,7 @@ async function loadPreparedSpeechEngine(
       return {
         nonSpecialTokenCount: length! - 2,
         synthesisInput: inputIds,
+        voice,
       };
     },
 
@@ -192,7 +204,7 @@ async function loadPreparedSpeechEngine(
       try {
         const model = await loadModel();
         audio = await model.generate_from_ids(analysis.synthesisInput, {
-          voice: FIXED_VOICE,
+          voice: analysis.voice,
           speed: FIXED_SPEED,
         });
       } catch {
@@ -251,8 +263,8 @@ export function createNativeHelperDependencies(
       await preflight();
       throwIfAborted(signal);
     },
-    inspectText: async (text, signal) =>
-      (await engine()).inspectText(text, signal),
+    inspectText: async (text, signal, voice) =>
+      (await engine()).inspectText(text, signal, voice),
     synthesize: async (analysis, signal) =>
       (await engine()).synthesize(analysis, signal),
     play: async (audio, signal) => {
@@ -267,7 +279,8 @@ export function createNativeHelperDependencies(
         PHONEMIZATION_TIMEOUT_MS,
         signal,
         operationFailure("phonemization-timeout"),
-        (stageSignal) => ready.inspectText(SELF_TEST_TEXT, stageSignal),
+        (stageSignal) =>
+          ready.inspectText(SELF_TEST_TEXT, stageSignal, SELF_TEST_VOICE),
       );
       if (analysis.nonSpecialTokenCount > MAX_NON_SPECIAL_TOKENS) {
         throw new Error("self-test-input-invalid");
@@ -300,20 +313,26 @@ async function loadSpeechLibraries(): Promise<SpeechLibraries> {
       kokoro.KokoroTTS.from_pretrained(modelId, options) as Promise<KokoroModel>,
     loadTokenizer: (modelId) =>
       transformers.AutoTokenizer.from_pretrained(modelId) as Promise<KokoroTokenizer>,
-    phonemize: kokoro.phonemize,
+    phonemize: async (text, language) => {
+      if (language === "en-us" || language === "en-gb") {
+        return kokoro.phonemize(text, language === "en-us" ? "a" : "b");
+      }
+      const { phonemizeMultilingual } = await import("./multilingual-phonemizer");
+      return phonemizeMultilingual(text, language);
+    },
   };
 }
 
 function installVoiceProvider(
-  path: string,
+  packRoot: string,
   readVoice: (path: string) => Promise<ArrayBuffer>,
 ): void {
   Object.defineProperty(globalThis, VOICE_PROVIDER_SYMBOL, {
     configurable: true,
     value: async (voice: string) => {
-      if (voice !== FIXED_VOICE) throw new Error("unsupported-voice");
+      if (!isSupportedVoice(voice)) throw new Error("unsupported-voice");
       try {
-        return await readVoice(path);
+        return await readVoice(resolve(packRoot, voiceRelativePath(voice)));
       } catch {
         throw new Error("voice-asset-unavailable");
       }

@@ -115,11 +115,15 @@ describe("supervised native engine process", () => {
     const engine = createSupervisedSpeechEngine("/pack", dependencies);
     const signal = new AbortController().signal;
 
-    const analysis = await engine.inspectText("private answer", signal);
+    const analysis = await engine.inspectText(
+      "private answer",
+      signal,
+      "ff_siwis",
+    );
     const audio = await engine.synthesize(analysis, signal);
 
     expect(new TextDecoder().decode(new Uint8Array(written))).toBe(
-      '{"text":"private answer"}',
+      '{"text":"private answer","voice":"ff_siwis"}',
     );
     expect(capturedCommand).toEqual(["/verified/llm-now-kokoro"]);
     expect(capturedEnvironment).toEqual({

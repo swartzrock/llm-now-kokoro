@@ -63,7 +63,7 @@ function mockDependencies(options: {
       events.push(["load"]);
       return {
         env: environment,
-        phonemize: async (text: string, language: "a") => {
+        phonemize: async (text: string, language: string) => {
           events.push(["phonemize", text, language]);
           return "həlˈoʊ";
         },
@@ -84,7 +84,7 @@ function mockDependencies(options: {
 describe("native local-only speech engine", () => {
   test("loads verified files and sidecars before importing a fixed q8 CPU model", async () => {
     const { dependencies, environment, events } = mockDependencies();
-    const packRoot = resolve("/packs/with spaces/ユニコード");
+    const packRoot = resolve("/packs/with spaces/Unicode ✓");
     const engine = await createNativeSpeechEngine(
       packRoot,
       dependencies,
@@ -109,10 +109,15 @@ describe("native local-only speech engine", () => {
       globalThis as typeof globalThis & Record<symbol, unknown>
     )[voiceProviderSymbol] as (voice: string) => Promise<ArrayBuffer>;
     await provider("af_heart");
-    await expect(provider("af_bella")).rejects.toThrow("unsupported-voice");
+    await provider("af_bella");
+    await expect(provider("../af_bella")).rejects.toThrow("unsupported-voice");
     expect(events).toContainEqual([
       "voice",
       resolve(packRoot, "model/voices/af_heart.bin"),
+    ]);
+    expect(events).toContainEqual([
+      "voice",
+      resolve(packRoot, "model/voices/af_bella.bin"),
     ]);
 
     const analysis = await engine.inspectText("Hello", signal);
@@ -122,7 +127,7 @@ describe("native local-only speech engine", () => {
       bytes: new Uint8Array([82, 73, 70, 70]),
       sampleCount: 2,
     });
-    expect(events).toContainEqual(["phonemize", "Hello", "a"]);
+    expect(events).toContainEqual(["phonemize", "Hello", "en-us"]);
     expect(events).toContainEqual([
       "tokenize",
       "həlˈoʊ",
@@ -137,6 +142,21 @@ describe("native local-only speech engine", () => {
       "model",
       "model",
       { device: "cpu", dtype: "q8" },
+    ]);
+  });
+
+  test("uses French phonemization and the selected French voice", async () => {
+    const { dependencies, events } = mockDependencies();
+    const engine = await createNativeSpeechEngine("/pack", dependencies);
+
+    const analysis = await engine.inspectText("Bonjour", signal, "ff_siwis");
+    await engine.synthesize(analysis, signal);
+
+    expect(events).toContainEqual(["phonemize", "Bonjour", "fr-fr"]);
+    expect(events).toContainEqual([
+      "infer",
+      analysis.synthesisInput,
+      { voice: "ff_siwis", speed: 1 },
     ]);
   });
 
@@ -196,7 +216,7 @@ describe("native local-only speech engine", () => {
     const helper = createNativeHelperDependencies("/pack", dependencies);
     await helper.preflight!(signal);
     for (const text of ["first", "second"]) {
-      const analysis = await helper.inspectText!(text, signal);
+      const analysis = await helper.inspectText!(text, signal, "af_heart");
       await helper.synthesize!(analysis, signal);
     }
 
@@ -224,8 +244,13 @@ describe("native local-only speech engine", () => {
 
     expect(events).toContainEqual([
       "phonemize",
-      "Native speech engine self test.",
-      "a",
+      "Bonjour, test vocal local.",
+      "fr-fr",
+    ]);
+    expect(events).toContainEqual([
+      "infer",
+      expect.anything(),
+      { voice: "ff_siwis", speed: 1 },
     ]);
     expect(events.filter((event) => (event as unknown[])[0] === "infer")).toHaveLength(1);
     expect(events).toContainEqual(["play", "/pack", 2, true]);
@@ -234,7 +259,7 @@ describe("native local-only speech engine", () => {
   test("normal helper playback uses the same synthesized WAV without check mode", async () => {
     const { dependencies, events } = mockDependencies();
     const helper = createNativeHelperDependencies("/pack", dependencies);
-    const analysis = await helper.inspectText!("Hello", signal);
+    const analysis = await helper.inspectText!("Hello", signal, "af_heart");
     const audio = await helper.synthesize!(analysis, signal);
     await helper.play!(audio, signal);
 

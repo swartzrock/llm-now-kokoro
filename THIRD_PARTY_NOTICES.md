@@ -1,4 +1,4 @@
-# Third-party notices and Phase 1 audit
+# Third-party notices and release compliance inventory
 
 This inventory records components that are used by the source tree or are
 expected in the optional speech pack. It is not a declaration that binary
@@ -6,17 +6,40 @@ redistribution has been cleared. Release is blocked until every shipped byte
 maps to a reviewed license, attribution, and corresponding-source or relink
 obligation.
 
+The complete GNU GPL version 3 terms are distributed in `LICENSE`. The release
+manifest provides the per-file mapping mechanically; this document provides
+the human review context. The helper executable includes the pinned
+phonemizer/eSpeak Emscripten JavaScript/data payload. That payload is distinct
+from `onnxruntime_binding.node` and the native ONNX Runtime library: no ONNX
+inference WASM is shipped.
+
 | Component | Pin / identity | Declared license | Phase 1 disposition |
 | --- | --- | --- | --- |
-| Bun | 1.3.14 | MIT plus licenses for bundled components | Build/runtime notice and JavaScriptCore obligations require final payload review. |
+| Bun / JavaScriptCore | 1.3.14 | MIT plus licenses for bundled components | The compiled helper is file-mapped to GPL-3.0-or-later; Bun/JSC notice, source, and relink obligations remain blocking. |
 | Transformers.js | 3.5.1 | Apache-2.0 | Exact source pin; ship its notice if included. |
 | Kokoro.js | 1.2.1, upstream commit `664c76a704021239ba59c84dcbaa4d3dece01fe9` | Apache-2.0 | Exact source pin and local patch must be included in corresponding source. |
 | ONNX Runtime | 1.21.0 | MIT | CPU native files only. Per-target DLL/dylib/SO inventory is a later release gate. |
-| Kokoro q8 model and `af_heart` | revision `1939ad2a8e416c0acfeecc08a694d14ef25f2231` | Apache-2.0 model card | Model/training-data attribution review remains open. |
+| Kokoro q8 model and 55 voice files | revision `1939ad2a8e416c0acfeecc08a694d14ef25f2231` | Apache-2.0 model card | Model/training-data attribution review remains open. |
 | phonemizer | 1.2.1, upstream commit `6835144b7ee9043129222549c1ed2f6a27216278` | npm metadata says Apache-2.0 | Bundle contains eSpeak-derived compiled code/data; the metadata is not sufficient for release. See below. |
 | eSpeak NG material in phonemizer | actual packaged payload described below | GPL-3.0-or-later | Establishes the repository's GPL-3.0-or-later posture. Exact provenance, preferred source, build scripts, and relink path remain release blockers. |
+| multilingual eSpeak NG | 1.0.2, upstream commit `eec88dbcc1482b1a03a76cf9d2025a0acde8982e` | GPL-3.0-or-later | Supplies the pinned language data and WASM phonemizer for non-English voices; corresponding source, reproducible build, and relink review remain blocking. |
 | miniaudio architecture spike | commit `350784a9467a79d0fa65802132668e5afbcf3777` | public domain or MIT-0 | Final player source and license must ship together; the spike header SHA-256 is `9019743287e443c55e5737a7297f38e5e358561701d6db2d905afb114390c410`. |
-| Microsoft Visual C++ runtime | exact files not yet approved | Microsoft redistributable terms | Clean-host need and redistribution rights remain a Windows release blocker. |
+| Microsoft Visual C++ runtime | exact files not yet approved | Microsoft redistributable terms | No app-local runtime file may enter the Windows set until its identity, clean-host need, and redistribution rights are evidenced. |
+
+## Release-file obligation classes
+
+- Helper and protocol: GPL-3.0-or-later terms, corresponding source, patches,
+  build scripts, and any required relink materials.
+- Player: pinned miniaudio source and MIT-0 or public-domain notice.
+- ONNX addon/runtime: ONNX Runtime 1.21.0 MIT license and source identity.
+- Model/config/tokenizer/voices: exact model revision, Apache-2.0 model-card
+  terms, and reviewed training-data attribution.
+- Notices/license/evidence: complete license and attribution text plus the
+  source commit and lockfile digests that generated them.
+
+Publication is blocked by the machine-readable compliance report while any
+file is unmapped or any of the eSpeak relink, Bun/JSC, model/training, or
+Windows app-local runtime reviews remains unresolved.
 
 ## Phonemizer/eSpeak payload audit
 
@@ -41,12 +64,24 @@ must be resolved against upstream source before release. The actual bundle and
 data hashes above are the Phase 1 inventory; they do not resolve GPL source,
 relink, attribution, or license-notice obligations.
 
+The separate multilingual `espeak-ng@1.0.2` payload is also verified before
+compilation:
+
+- `dist/espeak-ng.js`: 178,386 bytes, SHA-256
+  `406c6655a6cacf34d84fc69dc4478c81b71518809080ce2d05df1b706d76429d`.
+- `dist/espeak-ng.wasm`: 18,485,010 bytes, SHA-256
+  `10d24bb7e4124e983aa9cd8cd96c52c8ea4b607d81956ec70846684e2827d532`.
+
+These files provide the language data used by the Spanish, French, Hindi,
+Italian, Japanese, Portuguese, and Mandarin voice families. Their explicit
+inventory does not clear the existing GPL corresponding-source or relink gate.
+
 ## Model asset identities
 
 - q8 ONNX: 92,361,116 bytes, SHA-256
   `fbae9257e1e05ffc727e951ef9b9c98418e6d79f1c9b6b13bd59f5c9028a1478`.
-- `af_heart.bin`: 522,240 bytes, SHA-256
-  `d583ccff3cdca2f7fae535cb998ac07e9fcb90f09737b9a41fa2734ec44a8f0b`.
+- The 55 voice files are individually size- and SHA-256-pinned in
+  `src/voices.ts` and repeated in each generated shared release manifest.
 
 These hashes identify the fixed Phase 1 inputs. They are not a substitute for
 the immutable release manifest, source offer, or license review required in a

@@ -14,10 +14,17 @@
     "typecheck": "bun ./node_modules/typescript/bin/tsc --noEmit",
     "smoke:offline": "bun scripts/run-offline-inference-smoke.ts",
     "smoke:architecture:prepare": "bun scripts/prepare-architecture-smoke.ts",
-    "smoke:architecture": "bun scripts/run-architecture-smoke.ts"
+    "smoke:architecture": "bun scripts/run-architecture-smoke.ts",
+    "release:build": "bun scripts/build-release.ts",
+    "release:test": "bun test scripts/native-inspection.test.ts scripts/release-manifest.test.ts scripts/release-validation.test.ts scripts/release-security.test.ts tests/model-cache.integration.test.ts tests/standalone.integration.test.ts",
+    "release:validate": "bun run release:build && bun scripts/validate-release.ts",
+    "release:validate:unsigned": "bun scripts/validate-release.ts",
+    "release:validate:collected": "bun scripts/validate-collected-release.ts",
+    "release:metadata": "bun scripts/generate-release-metadata.ts"
   },
   "dependencies": {
     "@huggingface/transformers": "3.5.1",
+    "espeak-ng": "1.0.2",
     "kokoro-js": "1.2.1",
     "onnxruntime-node": "1.21.0"
   },

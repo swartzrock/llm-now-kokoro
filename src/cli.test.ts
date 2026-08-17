@@ -29,9 +29,9 @@ function dependenciesFor(
       events.push("preflight");
     },
     readStdin: async () => request(text),
-    inspectText: async (receivedText) => {
+    inspectText: async (receivedText, _signal, voice) => {
       events.push(`inspect:${receivedText}`);
-      return { nonSpecialTokenCount: 3, synthesisInput: "opaque" };
+      return { nonSpecialTokenCount: 3, synthesisInput: "opaque", voice };
     },
     synthesize: async (analysis) => {
       events.push(`synthesize:${analysis.synthesisInput as string}`);
@@ -127,6 +127,21 @@ describe("internal helper operations", () => {
     expect(output).toEqual({ stdout: [], stderr: [] });
   });
 
+  test("speak passes the selected voice through the private seams", async () => {
+    const events: string[] = [];
+    const output = { stdout: [] as string[], stderr: [] as string[] };
+    const dependencies = dependenciesFor("unused", events, output);
+    dependencies.readStdin = async () =>
+      encoder.encode(JSON.stringify({ text: "Bonjour", voice: "ff_siwis" }));
+    dependencies.inspectText = async (text, _signal, voice) => {
+      events.push(`inspect:${text}:${voice}`);
+      return { nonSpecialTokenCount: 3, synthesisInput: "opaque", voice };
+    };
+
+    expect(await runHelperMain(speakArguments, dependencies)).toBe(0);
+    expect(events).toContain("inspect:Bonjour:ff_siwis");
+  });
+
   test("rejects an invalid fixed pack before acquiring answer text", async () => {
     const events: string[] = [];
     const output = { stdout: [] as string[], stderr: [] as string[] };
@@ -173,11 +188,12 @@ describe("internal helper operations", () => {
     const events: string[] = [];
     const output = { stdout: [] as string[], stderr: [] as string[] };
     const dependencies = dependenciesFor("abbreviation-heavy", events, output);
-    dependencies.inspectText = async () => {
+    dependencies.inspectText = async (_text, _signal, voice) => {
       events.push("inspect");
       return {
         nonSpecialTokenCount: MAX_NON_SPECIAL_TOKENS + 1,
         synthesisInput: "opaque",
+        voice,
       };
     };
 

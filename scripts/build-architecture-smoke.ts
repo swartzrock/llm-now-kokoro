@@ -8,6 +8,7 @@ import {
 } from "../src/backend";
 import {
   verifyLocalModelAssets,
+  verifyPinnedMultilingualPhonemizer,
   verifyPinnedPhonemizerBundle,
 } from "../src/model-assets";
 import { ADDON_NAME } from "../src/native-runtime";
@@ -26,7 +27,7 @@ export const ARCHITECTURE_DIST_ROOT = resolve(
 );
 export const ARCHITECTURE_INSTALL_ROOT = resolve(
   ARCHITECTURE_DIST_ROOT,
-  "installed pack ユニコード",
+  "installed pack Unicode ✓",
 );
 export const ARCHITECTURE_RUNTIME_ROOT = resolve(
   ARCHITECTURE_INSTALL_ROOT,
@@ -63,6 +64,7 @@ export async function buildArchitectureSmoke(): Promise<void> {
 
   await verifyArchitectureAssets();
   await verifyPinnedPhonemizerBundle(resolve(import.meta.dir, ".."));
+  await verifyPinnedMultilingualPhonemizer(resolve(import.meta.dir, ".."));
   await rm(ARCHITECTURE_DIST_ROOT, { recursive: true, force: true });
   await mkdir(ARCHITECTURE_RUNTIME_ROOT, { recursive: true });
   await Promise.all([
@@ -166,6 +168,7 @@ async function buildPlayer(): Promise<void> {
             "cc",
             "-std=c99",
             "-O2",
+            "-mmacosx-version-min=13.0",
             `-I${includeDirectory}`,
             source,
             "-o",

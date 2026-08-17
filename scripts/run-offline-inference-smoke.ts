@@ -9,8 +9,9 @@ export async function runOfflineInferenceSmoke(packRoot: string): Promise<void> 
   const engine = await createNativeSpeechEngine(packRoot);
   const signal = new AbortController().signal;
   const analysis = await engine.inspectText(
-    "Offline native inference smoke.",
+    "Bonjour, comment allez-vous ?",
     signal,
+    "ff_siwis",
   );
   if (analysis.nonSpecialTokenCount > MAX_NON_SPECIAL_TOKENS) {
     throw new Error("offline-smoke-token-limit");
@@ -27,5 +28,5 @@ if (import.meta.main) {
   const packRoot = process.argv[2];
   if (!packRoot) throw new Error("assembled-pack-root-required");
   await runOfflineInferenceSmoke(packRoot);
-  console.log('{"status":"ok","network":"disabled","engine":"native-q8"}');
+  console.log('{"status":"ok","network":"disabled","engine":"native-q8","voice":"ff_siwis","language":"fr"}');
 }

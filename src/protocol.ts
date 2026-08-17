@@ -3,6 +3,12 @@ import {
   MAX_TEXT_SCALARS,
 } from "./limits";
 import { protocolFailure } from "./result";
+import {
+  DEFAULT_VOICE,
+  SUPPORTED_VOICES,
+  isSupportedVoice,
+  type SupportedVoiceName,
+} from "./voices";
 
 export { MAX_REQUEST_BYTES, MAX_TEXT_SCALARS } from "./limits";
 
@@ -14,6 +20,8 @@ export const PROTOCOL_CAPABILITIES = Object.freeze([
   "native-onnx-cpu",
   "local-q8",
   "voice-af-heart",
+  "selectable-voices",
+  "multilingual-voices",
   "speed-1.0",
   "bundled-player-stdin",
 ] as const);
@@ -27,6 +35,7 @@ export interface HelperCommand {
 
 export interface SpeakRequest {
   text: string;
+  voice: SupportedVoiceName;
 }
 
 const OPERATIONS = new Set<HelperOperation>(["info", "self-test", "speak"]);
@@ -87,8 +96,11 @@ export function decodeSpeakRequest(bytes: Uint8Array): SpeakRequest {
     throw protocolFailure("malformed-request");
   }
 
-  if (!isExactTextObject(value)) {
+  if (!isExactSpeakObject(value)) {
     throw protocolFailure("invalid-request");
+  }
+  if (value.voice !== undefined && !isSupportedVoice(value.voice)) {
+    throw protocolFailure("unsupported-voice");
   }
   if (value.text.includes("\0")) {
     throw protocolFailure("nul-text");
@@ -103,7 +115,7 @@ export function decodeSpeakRequest(bytes: Uint8Array): SpeakRequest {
     throw protocolFailure("text-too-long");
   }
 
-  return { text: value.text };
+  return { text: value.text, voice: value.voice ?? DEFAULT_VOICE };
 }
 
 export function encodeInfoResponse(): string {
@@ -114,7 +126,8 @@ export function encodeInfoResponse(): string {
     engine: {
       inference: "onnxruntime-node-cpu",
       model: "q8",
-      voice: "af_heart",
+      voice: DEFAULT_VOICE,
+      voices: SUPPORTED_VOICES,
       speed: 1,
     },
   })}\n`;
@@ -124,14 +137,15 @@ function isOperation(value: string | undefined): value is HelperOperation {
   return value !== undefined && OPERATIONS.has(value as HelperOperation);
 }
 
-function isExactTextObject(value: unknown): value is SpeakRequest {
+function isExactSpeakObject(
+  value: unknown,
+): value is { text: string; voice?: unknown } {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return false;
   }
-  const keys = Object.keys(value);
+  const keys = Object.keys(value).sort();
   return (
-    keys.length === 1 &&
-    keys[0] === "text" &&
+    (keys.join(",") === "text" || keys.join(",") === "text,voice") &&
     typeof (value as { text?: unknown }).text === "string"
   );
 }

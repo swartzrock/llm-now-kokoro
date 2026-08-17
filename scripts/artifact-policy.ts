@@ -14,9 +14,7 @@ export function assertInferenceArtifactPolicy(
       lower.includes("ort-wasm") ||
       lower.includes("cuda") ||
       lower.includes("directml") ||
-      lower.includes("providers_dml") ||
-      (/\/voices\/[^/]+\.bin$/.test(lower) &&
-        !lower.endsWith("/voices/af_heart.bin"))
+      lower.includes("providers_dml")
     ) {
       throw new Error("forbidden-inference-artifact");
     }

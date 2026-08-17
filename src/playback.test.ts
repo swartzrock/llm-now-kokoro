@@ -10,7 +10,7 @@ import {
 } from "./playback";
 import { operationFailure } from "./result";
 
-const packRoot = resolve("/packs/with spaces/ユニコード");
+const packRoot = resolve("/packs/with spaces/Unicode ✓");
 const runtimeRoot = resolve(packRoot, "runtime");
 const playerPath = resolve(runtimeRoot, "llm-now-kokoro-player");
 const linuxRuntimeRoot = resolve("/run/user/501");
